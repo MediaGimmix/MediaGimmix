@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- "Open on wake" (WakeLaunch.kt): a foreground service that opens the app on unlock. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
     <application
         android:allowBackup="true"
         android:label="@string/app_name"
@@ -14,6 +20,34 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".WakeLaunchService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Opens the music player when the user unlocks the phone" />
+        </service>
+
+        <receiver
+            android:name=".WakeLaunchBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- "Media" Quick Settings tile: opens the app. -->
+        <service
+            android:name=".MediaTileService"
+            android:exported="true"
+            android:label="Media"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
 
     </application>
 

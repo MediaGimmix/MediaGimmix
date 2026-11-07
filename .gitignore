@@ -8,3 +8,5 @@ env.sh
 captures/
 *.apk
 *.aab
+.source-backups/
+.cxx/

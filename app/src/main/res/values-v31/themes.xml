@@ -1,0 +1,9 @@
+<resources>
+    <!-- Android 12+ always shows a system launch screen first: make it plain black with no icon,
+         so it blends into the app's own splash (Splash.kt). -->
+    <style name="Theme.MediaPlayer" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowSplashScreenBackground">@android:color/black</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+    </style>
+</resources>

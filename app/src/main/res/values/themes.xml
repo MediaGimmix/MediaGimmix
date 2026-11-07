@@ -1,3 +1,6 @@
 <resources>
-    <style name="Theme.MediaPlayer" parent="android:Theme.Material.NoActionBar" />
+    <!-- Black window while the app starts, matching the startup splash (Splash.kt). -->
+    <style name="Theme.MediaPlayer" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
 </resources>
