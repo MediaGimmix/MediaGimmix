@@ -20,7 +20,11 @@ import androidx.media3.common.Player
 import androidx.media3.common.Format
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.DecoderReuseEvaluation
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
@@ -228,7 +232,19 @@ class Playback(
                 return sink?.let { AnalyzingAudioSink(it, analyzer) }
             }
         }.setEnableAudioFloatOutput(mode == OutputMode.HI_RES)
+        // Streams from the Jellyfin server get its Authorization header; local content:// URIs pass straight through.
+        val dataSources = ResolvingDataSource.Factory(
+            DefaultDataSource.Factory(
+                context,
+                DefaultHttpDataSource.Factory()
+                    .setUserAgent("MediaPlayer/0.1")
+                    .setConnectTimeoutMs(10_000)
+                    .setReadTimeoutMs(30_000)
+                    .setAllowCrossProtocolRedirects(true),
+            ),
+        ) { spec -> Jellyfin.authorize(spec) }
         val p = ExoPlayer.Builder(context, renderers)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSources))
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -404,6 +420,10 @@ class Playback(
         }
         if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
         player.play()
+    }
+
+    fun pause() {
+        player.pause()
     }
 
     fun togglePause() {

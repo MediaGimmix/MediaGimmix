@@ -2,15 +2,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- "Open on wake" (WakeLaunch.kt): a foreground service that opens the app on unlock. -->
+    <!-- Jellyfin streaming (Jellyfin.kt). The app only contacts the server the user signs in to. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:label="@string/app_name"
-        android:theme="@style/Theme.MediaPlayer">
+        android:theme="@style/Theme.MediaPlayer"
+        android:usesCleartextTraffic="true">
+        <!-- Cleartext: home Jellyfin servers are usually plain http on the local network. -->
 
         <activity
             android:name=".MainActivity"
@@ -38,10 +42,12 @@
             </intent-filter>
         </receiver>
 
-        <!-- "Media" Quick Settings tile: opens the app. -->
+        <!-- "Media" Quick Settings tile: opens the app. Android hides tiles without an icon, so it uses
+             Android's built-in play icon; assets/icons/tile_media.png replaces it once the tile is added. -->
         <service
             android:name=".MediaTileService"
             android:exported="true"
+            android:icon="@android:drawable/ic_media_play"
             android:label="Media"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>

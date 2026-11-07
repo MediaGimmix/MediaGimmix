@@ -10,6 +10,7 @@ Library menu
   menu_most_played.png     Most played
   menu_recently_added.png  Recently added
   menu_long.png            Long (over 10 minutes)
+  menu_jellyfin.png        Jellyfin (placeholder: 📡, extracted from Noto Color Emoji)
 
 Menu items (queue rows, song rows, album/playlist tiles, now playing "..." menu)
   action_play_next.png     Play next

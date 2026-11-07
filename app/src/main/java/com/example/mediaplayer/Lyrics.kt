@@ -42,7 +42,9 @@ object LyricsLoader {
         val key = song.uri.toString()
         cache.get(key)?.let { return it.lyrics }
         val lyrics = withContext(Dispatchers.IO) {
-            runCatching { sidecar(context, song) ?: embedded(context, song) }.getOrNull()
+            runCatching {
+                if (Jellyfin.isJellyfin(song)) Jellyfin.lyrics(song) else sidecar(context, song) ?: embedded(context, song)
+            }.getOrNull()
         }
         cache.put(key, Result(lyrics))
         return lyrics

@@ -66,7 +66,12 @@ enum class LibrarySection(val label: String, val implemented: Boolean) {
     MOST_PLAYED("Most played", true),
     RECENTLY_ADDED("Recently added", true),
     LONG("Long (over 10 minutes)", true),
+    JELLYFIN("Jellyfin", true),
 }
+
+/** Back from [openKey]: Jellyfin keys are paths ("albums/<key>" -> "albums" -> menu); others go to the section. */
+private fun parentKey(section: LibrarySection?, openKey: String): String? =
+    if (section == LibrarySection.JELLYFIN && '/' in openKey) openKey.substringBefore('/') else null
 
 @Composable
 fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
@@ -121,7 +126,7 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
             showNowPlaying -> showNowPlaying = false
             showSettings -> showSettings = false
             tab == 1 -> tab = 0
-            openKey != null -> openKey = null
+            openKey != null -> openKey = parentKey(section, openKey!!)
             else -> section = null
         }
     }
@@ -356,6 +361,8 @@ private fun LibraryContent(
             subtitle = { s -> "${shortDateText(s.dateAdded)} · ${s.displaySubtitle}" },
         )
 
+        LibrarySection.JELLYFIN -> JellyfinContent(vm, openKey, onOpenKey, onBack = backToMenu, rowArt = rowArt)
+
         LibrarySection.LONG -> SongList(
             title = "Long",
             status = "${"%,d".format(vm.longSongs.size)} songs over 10 minutes, longest first",
@@ -365,6 +372,140 @@ private fun LibraryContent(
             rowArt = rowArt,
             subtitle = { s -> "${songLengthText(s.durationMs)} · ${s.displaySubtitle}" },
         )
+    }
+}
+
+/**
+ * The Jellyfin section: its own Albums / Artists / Songs / Playlists from the server.
+ * [openKey] is a path: null (this menu), "albums", "albums/<album key>", "artists/<key>", ...
+ */
+@Composable
+private fun JellyfinContent(
+    vm: LibraryViewModel,
+    openKey: String?,
+    onOpenKey: (String?) -> Unit,
+    onBack: () -> Unit,
+    rowArt: (Song) -> ArtSource?,
+) {
+    val playback = vm.playback
+    val area = openKey?.substringBefore('/')
+    val item = openKey?.substringAfter('/', "")?.ifEmpty { null }
+    val up = { onOpenKey(area) }
+    val toMenu = { onOpenKey(null) }
+
+    when (area) {
+        null -> Column(modifier = Modifier.fillMaxSize()) {
+            ListHeader(title = vm.jellyfinAccount?.serverName ?: "Jellyfin", onBack = onBack)
+            val acc = vm.jellyfinAccount
+            when {
+                acc == null -> StatusText("Not signed in. Sign in to your server in Settings → Jellyfin.")
+                vm.jellyfinLocked -> StatusText(vm.yubikey.prompt ?: "Locked: plug in a trusted YubiKey.")
+                vm.jellyfinStatus.isNotEmpty() -> StatusText(vm.jellyfinStatus)
+                vm.jellyfinSongs.isEmpty() -> StatusText("No music found on the server yet. Sync in Settings → Jellyfin.")
+            }
+            if (acc != null && !vm.jellyfinLocked) {
+                MenuRow("Albums", "${"%,d".format(vm.jellyfinAlbums.size)} albums", true, { onOpenKey("albums") }, icon = "menu_albums")
+                MenuRow("Artists", "${"%,d".format(vm.jellyfinArtists.size)} artists", true, { onOpenKey("artists") }, icon = "menu_artists")
+                MenuRow("Songs", "${"%,d".format(vm.jellyfinSongs.size)} songs", true, { onOpenKey("songs") }, icon = "menu_songs")
+                MenuRow("Playlists", "${vm.jellyfinPlaylists.size} playlists", true, { onOpenKey("playlists") }, icon = "menu_playlists")
+            }
+        }
+
+        "songs" -> SongList(
+            title = "Songs",
+            status = "${"%,d".format(vm.jellyfinSongs.size)} songs",
+            songs = vm.jellyfinSongs.sortedBy { it.displayTitle.lowercase() },
+            playback = playback,
+            onBack = toMenu,
+            rowArt = rowArt,
+        )
+
+        "albums" -> {
+            val open = item?.let { k -> vm.jellyfinAlbums.firstOrNull { it.key == k } }
+            if (open != null) {
+                SongList(
+                    title = open.title,
+                    status = albumSummary(open),
+                    songs = open.songs,
+                    playback = playback,
+                    onBack = up,
+                    art = vm.albumArt(open),
+                    subtitle = { s ->
+                        listOfNotNull(if (s.trackNumber > 0) "Track ${s.trackNumber}" else null, s.artist)
+                            .joinToString(" · ").ifEmpty { s.fileName }
+                    },
+                )
+            } else {
+                CoverGrid(
+                    title = "Albums",
+                    emptyText = "No albums on the server.",
+                    entries = vm.jellyfinAlbums,
+                    key = { it.key },
+                    label = { it.title },
+                    subtitle = { a -> listOfNotNull(a.artist, if (a.year > 0) a.year.toString() else null).joinToString(" · ") },
+                    art = { vm.albumArt(it) },
+                    actions = { a ->
+                        listOf(
+                            MenuAction("Play") { playback.playAll(a.songs, shuffled = false) },
+                            MenuAction("Shuffle") { playback.playAll(a.songs, shuffled = true) },
+                        )
+                    },
+                    onOpen = { onOpenKey("albums/" + it.key) },
+                    onBack = toMenu,
+                )
+            }
+        }
+
+        "artists" -> {
+            val open = item?.let { k -> vm.jellyfinArtists.firstOrNull { it.key == k } }
+            if (open != null) {
+                SongList(open.name, artistSummary(open), open.songs, playback, onBack = up, rowArt = rowArt)
+            } else {
+                GroupList(
+                    title = "Artists",
+                    emptyText = "No artists on the server.",
+                    entries = vm.jellyfinArtists,
+                    key = { it.key },
+                    label = { it.name },
+                    subtitle = { artistSummary(it) },
+                    onOpen = { onOpenKey("artists/" + it.key) },
+                    onBack = toMenu,
+                )
+            }
+        }
+
+        else -> { // "playlists"
+            val open = item?.let { k -> vm.jellyfinPlaylists.firstOrNull { it.uri.toString() == k } }
+            if (open != null) {
+                SongList(
+                    title = open.name,
+                    status = playlistSummary(open),
+                    songs = open.songs,
+                    playback = playback,
+                    onBack = up,
+                    art = vm.playlistArt(open),
+                    rowArt = rowArt,
+                )
+            } else {
+                CoverGrid(
+                    title = "Playlists",
+                    emptyText = "No playlists on the server.",
+                    entries = vm.jellyfinPlaylists,
+                    key = { it.uri.toString() },
+                    label = { it.name },
+                    subtitle = { playlistSummary(it) },
+                    art = { vm.playlistArt(it) },
+                    actions = { p ->
+                        listOf(
+                            MenuAction("Play") { playback.playAll(p.songs, shuffled = false) },
+                            MenuAction("Shuffle") { playback.playAll(p.songs, shuffled = true) },
+                        )
+                    },
+                    onOpen = { onOpenKey("playlists/" + it.uri) },
+                    onBack = toMenu,
+                )
+            }
+        }
     }
 }
 
@@ -414,6 +555,12 @@ private fun LibraryHome(vm: LibraryViewModel, onAddFolder: () -> Unit, onOpen: (
                 LibrarySection.MOST_PLAYED -> if (vm.mostPlayed.isEmpty()) "Nothing played yet" else "Top ${vm.mostPlayed.size}"
                 LibrarySection.RECENTLY_ADDED -> "Newest ${vm.recentlyAdded.size}"
                 LibrarySection.LONG -> "${"%,d".format(vm.longSongs.size)} songs"
+                LibrarySection.JELLYFIN -> when {
+                    vm.jellyfinAccount == null -> "Not signed in: Settings → Jellyfin"
+                    vm.jellyfinLocked -> "Locked: plug in a trusted YubiKey"
+                    vm.jellyfinBusy -> "Syncing..."
+                    else -> "${"%,d".format(vm.jellyfinSongs.size)} songs on ${vm.jellyfinAccount?.serverName}"
+                }
             }
             MenuRow(
                 label = s.label,

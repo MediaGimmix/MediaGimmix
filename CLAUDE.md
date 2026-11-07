@@ -73,5 +73,27 @@ Install with `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
   OpenSL ES can't pick a device
 - Shuffle is saved as "shuffle" in "settings" (`Playback.onShuffleChanged`), restored at startup
 - Startup splash: `Splash.kt` overlay in `MainActivity` (optional assets/icons/splash.png + name; fade in, hold, slow fade out; never blocks touches).
-  Times in `SplashConfig.kt` (edit + rebuild; all 0 = no splash). The system launch screen is made plain black in
+  Times in `SplashConfig.kt` (edit + rebuild; all 0 = no splash); Settings → Startup switch "splash_enabled" (default on). The system launch screen is made plain black in
   res/values-v31/themes.xml so it blends in
+- Settings is paged (`SettingsPage`: Library, Audio, Jellyfin, Artist names, Artwork, Startup); its own BackHandler
+  returns to the page list
+- Jellyfin (`Jellyfin.kt`): separate library section (`LibrarySection.JELLYFIN`, openKey paths "albums/<key>" etc.).
+  Sign-in via /Users/AuthenticateByName, only the token is stored (prefs "jellyfin"); library cached in
+  filesDir/jellyfin_library.json, auto-synced at start when > 12 h old. Songs are `Song`s with rootUri "jellyfin" and
+  uri `<server>/Audio/<id>/stream?static=true` (original files); `Jellyfin.authorize` adds the Authorization header in
+  Playback's ResolvingDataSource. Covers: `ArtSource.FromJellyfin` (album Primary image); lyrics: /Audio/<id>/Lyrics.
+  No play reporting, no downloads. Delete / local playlists are disabled for Jellyfin songs. INTERNET permission +
+  usesCleartextTraffic (plain-http home servers)
+- Web control (`WebControl.kt` + `WebServer.kt`, no libraries; owned by `LibraryViewModel.web`): NEVER on at startup
+  (running state is not saved, by the user's rule); port, access key and "require key" are saved ("web_port",
+  "web_key", "web_require_key"). JSON API under /api/ (key via X-Api-Key or ?key=; ?source=jellyfin for the Jellyfin
+  library; ids = first 16 hex of SHA-1 of the song uri / "album:<key>" / "artist:<key>"); endpoint list at the bottom of
+  app/src/main/assets/web/index.html (Bootstrap 5 from jsDelivr CDN). files/web/ in external app storage overrides the
+  built-in page. Library/player access is marshalled to the main thread (`onMain`). Settings page "Web control"
+- YubiKey vault (`SecurityKeys.kt`, yubikit-android 3.0.1 — newest without a Kotlin 2.2 stdlib; no Google deps):
+  `TokenVault` stores the Jellyfin token plain (prefs "jellyfin") until a key is registered, then AES-GCM encrypted
+  (prefs "vault") with a random vault key; each `TrustedKey` keeps a random challenge + the vault key wrapped with
+  HKDF-SHA256(HMAC-SHA1 response, challenge). `YubiKeyUsb` (USB only) registers keys (optionally programming slot 1/2
+  with a fresh HMAC secret, touch optional) and unlocks when a trusted key is plugged in. `Jellyfin.signedIn` vs
+  `account` (null while locked). Settings page "YubiKey": status, Lock now, trusted keys (rename, de-trust), register.
+  android:allowBackup="false"

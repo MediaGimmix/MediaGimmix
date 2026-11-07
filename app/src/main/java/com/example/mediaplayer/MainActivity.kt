@@ -35,9 +35,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             MediaPlayerTheme {
                 // Saved, so rotating the screen doesn't show the splash again.
-                var splashDone by rememberSaveable { mutableStateOf(SplashConfig.FADE_IN_MS + SplashConfig.HOLD_MS + SplashConfig.FADE_OUT_MS == 0) }
+                var splashDone by rememberSaveable { mutableStateOf(!SplashConfig.isEnabled(this@MainActivity)) }
                 LaunchedEffect(splashReplays) {
-                    if (splashReplays > 0 && SplashConfig.FADE_IN_MS + SplashConfig.HOLD_MS + SplashConfig.FADE_OUT_MS > 0) {
+                    if (splashReplays > 0 && SplashConfig.isEnabled(this@MainActivity)) {
                         splashDone = false
                     }
                 }

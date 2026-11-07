@@ -59,4 +59,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-session:1.5.1")
+    // YubiKey over USB (HMAC challenge-response) for the Jellyfin token vault. 3.0.1: newest without a
+    // Kotlin 2.2 stdlib dependency; no Google libraries.
+    implementation("com.yubico.yubikit:android:3.0.1")
+    implementation("com.yubico.yubikit:yubiotp:3.0.1")
 }

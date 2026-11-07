@@ -1,0 +1,268 @@
+<!doctype html>
+<!--
+  Media Player web control panel. Served by the app (WebControl.kt) at http://<phone ip>:<port>/
+  Edit freely. Two ways to change it:
+    1. Edit this file in the project (app/src/main/assets/web/index.html) and rebuild.
+    2. Without rebuilding: put your own index.html (and any other files) in the phone's
+       Android/data/com.example.mediaplayer/files/web/ folder, e.g.
+         adb push index.html /sdcard/Android/data/com.example.mediaplayer/files/web/index.html
+       A file there wins over the built-in one.
+  API: see the "API" section at the bottom of this file.
+-->
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Media Player</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .cover { width: 100%; aspect-ratio: 1; object-fit: cover; background: #222; border-radius: .5rem; }
+    .np-cover { width: 72px; height: 72px; object-fit: cover; background: #222; border-radius: .4rem; }
+    .song-row { cursor: default; }
+    .clickable { cursor: pointer; }
+    .current { color: #3fbfa0; font-weight: 600; }
+    .sticky-top { backdrop-filter: blur(6px); }
+  </style>
+</head>
+<body>
+
+<!-- Now playing + transport -->
+<div class="sticky-top bg-body-tertiary border-bottom">
+  <div class="container py-2 d-flex align-items-center gap-3">
+    <img id="npCover" class="np-cover" alt="">
+    <div class="flex-grow-1 overflow-hidden">
+      <div id="npTitle" class="fw-semibold text-truncate">Nothing playing</div>
+      <div id="npSub" class="small text-body-secondary text-truncate"></div>
+      <div class="progress mt-1" style="height: 4px;"><div id="npProgress" class="progress-bar" style="width: 0%"></div></div>
+    </div>
+    <div class="btn-group" role="group" aria-label="Transport">
+      <button class="btn btn-outline-light" onclick="cmd('prev')" title="Previous">&#9198;</button>
+      <button class="btn btn-light" id="playPause" onclick="cmd('toggle')" title="Play / pause">&#9654;</button>
+      <button class="btn btn-outline-light" onclick="cmd('next')" title="Next">&#9197;</button>
+      <button class="btn btn-outline-light" id="shuffleBtn" onclick="cmd('shuffle')" title="Shuffle">Shuffle</button>
+    </div>
+  </div>
+</div>
+
+<div class="container py-3">
+  <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+    <ul class="nav nav-pills" id="tabs">
+      <li class="nav-item"><a class="nav-link active" href="#" data-tab="artists">Artists</a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-tab="albums">Albums</a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-tab="songs">Songs</a></li>
+      <li class="nav-item"><a class="nav-link" href="#" data-tab="queue">Queue</a></li>
+    </ul>
+    <div class="btn-group ms-auto" role="group" aria-label="Source">
+      <input type="radio" class="btn-check" name="source" id="srcLocal" value="local" checked>
+      <label class="btn btn-outline-secondary btn-sm" for="srcLocal">On phone</label>
+      <input type="radio" class="btn-check" name="source" id="srcJelly" value="jellyfin">
+      <label class="btn btn-outline-secondary btn-sm" for="srcJelly">Jellyfin</label>
+    </div>
+    <input id="search" class="form-control form-control-sm" style="max-width: 16rem" placeholder="Filter">
+    <button class="btn btn-sm btn-outline-secondary" onclick="forgetKey()">Change key</button>
+  </div>
+
+  <div id="crumbs" class="mb-2"></div>
+  <div id="content"></div>
+</div>
+
+<!-- Access key -->
+<div class="modal fade" id="keyModal" tabindex="-1" data-bs-backdrop="static">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Access key</h5></div>
+      <div class="modal-body">
+        <p class="small text-body-secondary">Shown in the app under Settings → Web control.</p>
+        <input id="keyInput" class="form-control" autocomplete="off">
+        <div id="keyError" class="text-danger small mt-2"></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-primary" onclick="saveKey()">Connect</button></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// ---- API helpers -------------------------------------------------------------------
+let key = localStorage.getItem('mpKey') || '';
+let tab = 'artists';
+let view = null;          // drill-down: {type: 'artist'|'album', id, name}
+let cache = {};
+const keyModal = new bootstrap.Modal(document.getElementById('keyModal'));
+
+function source() { return document.querySelector('input[name=source]:checked').value; }
+function q(extra) {
+  const p = new URLSearchParams(extra || {});
+  if (source() === 'jellyfin') p.set('source', 'jellyfin');
+  const s = p.toString();
+  return s ? '?' + s : '';
+}
+async function api(path, opts) {
+  const r = await fetch('/api/' + path, Object.assign({ headers: { 'X-Api-Key': key } }, opts || {}));
+  if (r.status === 401) { askKey('That key was not accepted.'); throw new Error('unauthorized'); }
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+  return r.json();
+}
+function artUrl(kind, id, size) { return `/api/${kind}/${id}/art?size=${size || 300}&key=${encodeURIComponent(key)}`; }
+function dlUrl(id) { return `/api/songs/${id}/download?key=${encodeURIComponent(key)}`; }
+function el(tag, attrs, ...children) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === 'onclick') e.onclick = v; else if (k === 'text') e.textContent = v; else e.setAttribute(k, v);
+  }
+  for (const c of children) if (c != null) e.append(c);
+  return e;
+}
+function fmt(ms) { const s = Math.floor(ms / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+function filterText() { return document.getElementById('search').value.trim().toLowerCase(); }
+
+// ---- key -------------------------------------------------------------------------------
+function askKey(msg) {
+  document.getElementById('keyError').textContent = msg || '';
+  document.getElementById('keyInput').value = key;
+  keyModal.show();
+}
+function saveKey() {
+  key = document.getElementById('keyInput').value.trim();
+  localStorage.setItem('mpKey', key);
+  keyModal.hide();
+  cache = {};
+  render();
+}
+function forgetKey() { askKey(''); }
+
+// ---- player ----------------------------------------------------------------------------
+async function cmd(c) { showStatus(await api('player/' + c, { method: 'POST' })); }
+async function playSong(id) { showStatus(await api('songs/' + id + '/play', { method: 'POST' })); }
+let lastSongId = null;
+function showStatus(s) {
+  const np = s.nowPlaying;
+  document.getElementById('npTitle').textContent = np ? np.title : 'Nothing playing';
+  document.getElementById('npSub').textContent = np ? [np.artist, np.album].filter(Boolean).join(' · ') : '';
+  document.getElementById('playPause').innerHTML = s.isPlaying ? '&#9208;' : '&#9654;';
+  const sh = document.getElementById('shuffleBtn');
+  sh.classList.toggle('btn-light', s.shuffle); sh.classList.toggle('btn-outline-light', !s.shuffle);
+  document.getElementById('npProgress').style.width = s.durationMs ? (100 * s.positionMs / s.durationMs) + '%' : '0%';
+  const id = np ? np.id : null;
+  if (id !== lastSongId) {
+    lastSongId = id;
+    const img = document.getElementById('npCover');
+    if (id) img.src = artUrl('songs', id, 200); else img.removeAttribute('src');
+    if (tab === 'queue') render();
+  }
+}
+async function poll() { try { showStatus(await api('status')); } catch (e) {} }
+
+// ---- lists -----------------------------------------------------------------------------
+async function load(path) {
+  const k = source() + ':' + path;
+  if (!cache[k]) cache[k] = await api(path + q());
+  return cache[k];
+}
+function crumbs() {
+  const c = document.getElementById('crumbs');
+  c.innerHTML = '';
+  if (view) {
+    c.append(el('button', { class: 'btn btn-sm btn-outline-secondary me-2', onclick: () => { view = null; render(); } }, '← Back'),
+             el('span', { class: 'fw-semibold', text: view.name }));
+  }
+}
+function songTable(songs, highlight) {
+  const f = filterText();
+  const rows = songs.filter(s => !f || [s.title, s.artist, s.album].join(' ').toLowerCase().includes(f));
+  const tbody = el('tbody');
+  rows.forEach(s => {
+    const tr = el('tr', { class: 'song-row' + (highlight && s.id === lastSongId ? ' current' : '') },
+      el('td', { class: 'text-body-secondary small', text: s.track || '' }),
+      el('td', {}, el('div', { text: s.title }), el('div', { class: 'small text-body-secondary', text: [s.artist, s.album].filter(Boolean).join(' · ') })),
+      el('td', { class: 'small text-body-secondary', text: fmt(s.durationMs) }),
+      el('td', { class: 'text-end text-nowrap' },
+        el('button', { class: 'btn btn-sm btn-success me-1', onclick: () => playSong(s.id) }, 'Play'),
+        el('a', { class: 'btn btn-sm btn-outline-secondary', href: dlUrl(s.id) }, 'Download')));
+    tbody.append(tr);
+  });
+  return el('table', { class: 'table table-hover align-middle' }, tbody);
+}
+function albumGrid(albums) {
+  const f = filterText();
+  const row = el('div', { class: 'row g-3' });
+  albums.filter(a => !f || (a.title + ' ' + a.artist).toLowerCase().includes(f)).forEach(a => {
+    row.append(el('div', { class: 'col-6 col-sm-4 col-md-3 col-lg-2' },
+      el('div', { class: 'clickable', onclick: () => { view = { type: 'album', id: a.id, name: a.title + ' — ' + a.artist }; render(); } },
+        el('img', { class: 'cover', loading: 'lazy', src: artUrl('albums', a.id, 300), alt: '' }),
+        el('div', { class: 'small fw-semibold text-truncate mt-1', text: a.title }),
+        el('div', { class: 'small text-body-secondary text-truncate', text: [a.artist, a.year || null].filter(Boolean).join(' · ') }))));
+  });
+  return row;
+}
+async function render() {
+  crumbs();
+  const c = document.getElementById('content');
+  try {
+    let node;
+    if (view && view.type === 'album') {
+      node = songTable(await load('albums/' + view.id + '/songs'));
+    } else if (view && view.type === 'artist') {
+      const [albums, songs] = await Promise.all([load('artists/' + view.id + '/albums'), load('artists/' + view.id + '/songs')]);
+      node = el('div', {}, el('h6', { text: 'Albums' }), albumGrid(albums), el('h6', { class: 'mt-4', text: 'Songs' }), songTable(songs));
+    } else if (tab === 'artists') {
+      const f = filterText();
+      const list = el('div', { class: 'list-group' });
+      (await load('artists')).filter(a => !f || a.name.toLowerCase().includes(f)).forEach(a => list.append(
+        el('a', { href: '#', class: 'list-group-item list-group-item-action d-flex justify-content-between',
+                  onclick: (e) => { e.preventDefault(); view = { type: 'artist', id: a.id, name: a.name }; render(); } },
+          el('span', { text: a.name }), el('span', { class: 'small text-body-secondary', text: a.songCount + ' songs' }))));
+      node = list;
+    } else if (tab === 'albums') {
+      node = albumGrid(await load('albums'));
+    } else if (tab === 'songs') {
+      node = songTable(await load('songs'));
+    } else {
+      const qd = await api('queue');
+      node = el('div', {},
+        el('h6', { text: 'Play next (' + qd.playNext.length + ')' }), songTable(qd.playNext, true),
+        el('h6', { class: 'mt-4', text: 'Queue (' + qd.general.length + ')' }), songTable(qd.general, true));
+    }
+    c.replaceChildren(node);
+  } catch (e) {
+    if (e.message !== 'unauthorized') c.replaceChildren(el('div', { class: 'alert alert-danger', text: 'Error: ' + e.message }));
+  }
+}
+
+// ---- wiring ----------------------------------------------------------------------------
+document.querySelectorAll('#tabs a').forEach(a => a.onclick = (e) => {
+  e.preventDefault();
+  document.querySelectorAll('#tabs a').forEach(x => x.classList.remove('active'));
+  a.classList.add('active');
+  tab = a.dataset.tab; view = null; render();
+});
+document.querySelectorAll('input[name=source]').forEach(r => r.onchange = () => { view = null; render(); });
+let searchTimer;
+document.getElementById('search').oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(render, 200); };
+
+if (!key) askKey(''); else render();
+poll();
+setInterval(poll, 2000);
+
+/* ---- API ----------------------------------------------------------------------------
+   All under /api/, JSON. Send the access key as an "X-Api-Key" header or ?key=...
+   Add ?source=jellyfin to library calls for the Jellyfin library (default: songs on the phone).
+
+   GET  /api/artists                      list artists
+   GET  /api/albums                       list albums
+   GET  /api/artists/{id}/albums          an artist's albums
+   GET  /api/artists/{id}/songs           an artist's songs
+   GET  /api/songs                        every song (the song heap)
+   GET  /api/albums/{id}/songs            an album's songs
+   GET  /api/albums/{id}/art?size=600     album cover (JPEG)
+   GET  /api/songs/{id}/art?size=600      song cover (JPEG)
+   GET  /api/songs/{id}/download          the song's file
+   POST /api/songs/{id}/play              play a song on the phone (like tapping it in its album)
+   POST /api/player/play | pause | toggle | next | prev | stop
+   POST /api/player/shuffle[?on=true|false]   toggle (or set) shuffle
+   GET  /api/status                       now playing, playing/paused, shuffle, position
+   GET  /api/queue                        status + "playNext" and "general" queues + position
+*/
+</script>
+</body>
+</html>

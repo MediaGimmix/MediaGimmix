@@ -109,6 +109,37 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     var error by mutableStateOf<String?>(null)
         private set
 
+    /** The web control server (off at every start; see WebControl.kt). */
+    val web = WebControl(app, this)
+
+    // ---- Jellyfin (a separate library; see Jellyfin.kt)
+    /** Signed-in account (also while locked; its token is never shown). */
+    var jellyfinAccount by mutableStateOf<Jellyfin.Account?>(null)
+        private set
+    /** Signed in, but the token is locked behind a YubiKey (see SecurityKeys.kt). */
+    var jellyfinLocked by mutableStateOf(false)
+        private set
+
+    /** USB YubiKeys: registering trusted keys and unlocking the Jellyfin token. */
+    val yubikey = YubiKeyUsb(app) { onJellyfinUnlocked() }
+    var jellyfinSongs by mutableStateOf<List<Song>>(emptyList())
+        private set
+    var jellyfinPlaylists by mutableStateOf<List<Playlist>>(emptyList())
+        private set
+    var jellyfinAlbums by mutableStateOf<List<AlbumEntry>>(emptyList())
+        private set
+    var jellyfinArtists by mutableStateOf<List<ArtistEntry>>(emptyList())
+        private set
+    var jellyfinSyncedAt by mutableStateOf(0L)
+        private set
+    var jellyfinBusy by mutableStateOf(false)
+        private set
+    /** Progress or the last problem, shown in Settings and the Jellyfin section. */
+    var jellyfinStatus by mutableStateOf("")
+        private set
+    private var jellyfinArtIds: Map<String, String> = emptyMap()
+    private var jellyfinJob: Job? = null
+
     private var scanJob: Job? = null
     private var rebuildJob: Job? = null
     private var scanMeta = ScanMeta(0, 0L, false)
@@ -123,6 +154,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
             }
             reload()
             loading = false
+            loadJellyfin()
             // Only scan on startup if folders exist but nothing has ever been stored.
             if (neverScanned) rescan(full = false)
         }
@@ -179,17 +211,156 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     /** The cover to show for an album: its custom image, else its first song's cover. */
     fun albumArt(album: AlbumEntry): ArtSource? =
         customArt["album:" + album.key]?.let { ArtSource.FromImage(it) }
-            ?: album.songs.firstOrNull()?.let { ArtSource.FromSong(it) }
+            ?: album.songs.firstOrNull()?.let { ownArt(it) }
 
     /** The cover to show for a playlist: its custom image, else its first song's cover. */
     fun playlistArt(playlist: Playlist): ArtSource? =
         customArt["playlist:" + playlist.uri]?.let { ArtSource.FromImage(it) }
-            ?: playlist.songs.firstOrNull()?.let { ArtSource.FromSong(it) }
+            ?: playlist.songs.firstOrNull()?.let { ownArt(it) }
 
     /** The cover for a playing song: its album's custom image if there is one, else the song's own. */
     fun songArt(song: Song): ArtSource =
         LibraryGrouping.albumKey(song)?.let { customArt["album:$it"] }?.let { ArtSource.FromImage(it) }
-            ?: ArtSource.FromSong(song)
+            ?: ownArt(song)
+
+    /** A song's own cover: from the file, or for Jellyfin songs the server's album image. */
+    private fun ownArt(song: Song): ArtSource =
+        if (Jellyfin.isJellyfin(song)) {
+            jellyfinArtIds[song.uri.toString()]?.let { ArtSource.FromJellyfin(it) } ?: ArtSource.FromSong(song)
+        } else {
+            ArtSource.FromSong(song)
+        }
+
+    // ---- Jellyfin -----------------------------------------------------------------
+
+    private fun loadJellyfin() {
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            val lib = withContext(Dispatchers.IO) {
+                Jellyfin.init(app)
+                Jellyfin.loadCached(app)
+            }
+            jellyfinAccount = Jellyfin.signedIn
+            jellyfinLocked = Jellyfin.isLocked()
+            yubikey.refresh() // watches USB for a trusted key while locked
+            if (lib != null) applyJellyfin(lib)
+            // Refresh in the background when signed in and the copy is missing or over 12 hours old.
+            if (Jellyfin.account != null && (lib == null || System.currentTimeMillis() - lib.syncedAt > JELLYFIN_STALE_MS)) {
+                syncJellyfin()
+            }
+        }
+    }
+
+    /** A trusted YubiKey unlocked the vault: start Jellyfin. */
+    private fun onJellyfinUnlocked() {
+        if (!Jellyfin.unlock()) return
+        jellyfinLocked = false
+        if (jellyfinStatus.startsWith("Signed in for now")) jellyfinStatus = ""
+        viewModelScope.launch {
+            val lib = withContext(Dispatchers.IO) { Jellyfin.loadCached(getApplication()) }
+            if (lib != null) applyJellyfin(lib)
+            if (lib == null || System.currentTimeMillis() - lib.syncedAt > JELLYFIN_STALE_MS) syncJellyfin()
+        }
+    }
+
+    /** De-trusts a YubiKey; shows why if it can't (last key while locked). */
+    fun detrustKey(id: String) {
+        val error = TokenVault.removeKey(id)
+        if (error != null) toast(error)
+        // No keys left: the token is plain again; make sure Jellyfin runs.
+        if (!TokenVault.isProtected && jellyfinLocked) onJellyfinUnlocked()
+        yubikey.refresh()
+    }
+
+    /** "Lock now": forget the Jellyfin token until a trusted YubiKey is plugged in again. */
+    fun lockJellyfin() {
+        jellyfinJob?.cancel()
+        jellyfinBusy = false
+        Jellyfin.lock()
+        jellyfinLocked = Jellyfin.isLocked()
+        if (jellyfinLocked) applyJellyfin(Jellyfin.Library(emptyList(), emptyList(), emptyMap(), 0L))
+        yubikey.refresh()
+    }
+
+    fun jellyfinLastServer(): String = Jellyfin.lastServer(getApplication())
+
+    fun signInJellyfin(server: String, user: String, password: String) {
+        if (jellyfinBusy) return
+        jellyfinBusy = true
+        jellyfinStatus = "Signing in..."
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { Jellyfin.signIn(getApplication(), server, user, password) }
+            }
+            jellyfinBusy = false
+            result.onSuccess {
+                jellyfinAccount = Jellyfin.signedIn
+                jellyfinLocked = false
+                jellyfinStatus = if (TokenVault.isLocked()) {
+                    "Signed in for now. Plug in a trusted YubiKey to keep this sign-in after the app closes."
+                } else {
+                    ""
+                }
+                yubikey.refresh()
+                syncJellyfin()
+            }.onFailure { jellyfinStatus = it.message ?: "Sign-in failed" }
+        }
+    }
+
+    fun signOutJellyfin() {
+        jellyfinJob?.cancel()
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { Jellyfin.signOut(getApplication()) }
+            jellyfinAccount = null
+            jellyfinLocked = false
+            yubikey.refresh()
+            jellyfinBusy = false
+            jellyfinStatus = ""
+            applyJellyfin(Jellyfin.Library(emptyList(), emptyList(), emptyMap(), 0L))
+        }
+    }
+
+    fun syncJellyfin() {
+        val acc = Jellyfin.account ?: return
+        if (jellyfinJob?.isActive == true) return
+        jellyfinBusy = true
+        jellyfinStatus = "Connecting to ${acc.serverName}..."
+        jellyfinJob = viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    Jellyfin.sync(getApplication(), acc) { msg -> viewModelScope.launch { jellyfinStatus = msg } }
+                }
+            }
+            jellyfinBusy = false
+            result.onSuccess {
+                applyJellyfin(it)
+                jellyfinStatus = ""
+            }.onFailure { jellyfinStatus = "Sync failed: ${it.message ?: it.javaClass.simpleName}" }
+        }
+    }
+
+    private fun applyJellyfin(lib: Jellyfin.Library) {
+        jellyfinArtIds = lib.artIds
+        jellyfinSongs = lib.songs
+        jellyfinPlaylists = lib.playlists
+        jellyfinSyncedAt = lib.syncedAt
+        rebuildJellyfinIndex()
+    }
+
+    /** Albums and artists for the Jellyfin section, with the same artist splitting as local songs. */
+    private fun rebuildJellyfinIndex() {
+        val s = jellyfinSongs
+        val splitter = ArtistSplitter(delimiters, whitelist)
+        viewModelScope.launch {
+            val (al, ar) = withContext(Dispatchers.Default) {
+                LibraryGrouping.albums(s) to LibraryGrouping.artists(s, splitter)
+            }
+            if (s === jellyfinSongs) {
+                jellyfinAlbums = al
+                jellyfinArtists = ar
+            }
+        }
+    }
 
     fun clearArtworkCache() {
         viewModelScope.launch(Dispatchers.IO) {
@@ -213,6 +384,10 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         get() = playlists.filterNot { it.uri.toString().endsWith(".pls", ignoreCase = true) }
 
     fun addToPlaylist(song: Song, playlist: Playlist) {
+        if (Jellyfin.isJellyfin(song)) {
+            toast("Not available for Jellyfin songs")
+            return
+        }
         viewModelScope.launch {
             val failure = withContext(Dispatchers.IO) {
                 runCatching { PlaylistWriter.append(getApplication<Application>(), playlist, song) }.exceptionOrNull()
@@ -232,6 +407,10 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Creates a new .m3u8 playlist in the song's media folder, starting with [first]. */
     fun createPlaylist(name: String, first: Song) {
+        if (Jellyfin.isJellyfin(first)) {
+            toast("Not available for Jellyfin songs")
+            return
+        }
         val clean = name.replace(Regex("""[\\/:*?"<>|]"""), "").trim()
         if (clean.isEmpty()) {
             toast("Enter a playlist name")
@@ -254,6 +433,10 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Deletes the song's file from the device and removes it everywhere in the app. */
     fun deleteSong(song: Song) {
+        if (Jellyfin.isJellyfin(song)) {
+            toast("Not available for Jellyfin songs")
+            return
+        }
         viewModelScope.launch {
             val failure = withContext(Dispatchers.IO) {
                 runCatching {
@@ -440,6 +623,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Recomputes albums, artists, smart lists and stats in the background; a newer request cancels an older one. */
     private fun rebuildDerived() {
+        rebuildJellyfinIndex() // artist splitting applies to Jellyfin too
         val s = songs
         val p = playlists
         val counts = playStats
@@ -493,11 +677,14 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        web.stop()
+        yubikey.stop()
         playback.release()
         db.close()
     }
 
     companion object {
+        private const val JELLYFIN_STALE_MS = 12 * 60 * 60 * 1000L
         const val MOST_PLAYED_LIMIT = 100
         const val RECENTLY_ADDED_LIMIT = 250
         const val LONG_SONG_MS = 10 * 60_000L

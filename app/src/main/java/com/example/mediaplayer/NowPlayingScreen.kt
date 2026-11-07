@@ -300,10 +300,12 @@ fun NowPlayingScreen(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            IconButton(onClick = { showAddToPlaylist = true }, enabled = song != null) {
+            // Local playlists and deleting only work on files on the phone.
+            val local = song != null && !Jellyfin.isJellyfin(song)
+            IconButton(onClick = { showAddToPlaylist = true }, enabled = local) {
                 Icon(Icons.Filled.Add, contentDescription = "Add to playlist")
             }
-            IconButton(onClick = { confirmDelete = true }, enabled = song != null) {
+            IconButton(onClick = { confirmDelete = true }, enabled = local) {
                 Icon(Icons.Filled.Delete, contentDescription = "Delete file")
             }
         }

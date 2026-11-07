@@ -48,6 +48,11 @@ sealed interface ArtSource {
             get() = LibraryGrouping.albumKey(song)?.let { "album:$it" } ?: ("song:" + song.uri)
     }
 
+    /** A cover from the Jellyfin server: [itemId]'s Primary image. */
+    data class FromJellyfin(val itemId: String) : ArtSource {
+        override val key: String get() = "jf:" + itemId
+    }
+
     /** A user-chosen image (content URI). */
     data class FromImage(val uri: String) : ArtSource {
         override val key: String get() = "img:" + uri
@@ -90,8 +95,9 @@ object Artwork {
                     file.exists() -> BitmapFactory.decodeFile(file.path)
                     else -> {
                         val fetched = runCatching { fetch(context, source, sizePx) }.getOrNull()
+                        // A server cover that failed is likely a network problem: don't remember it as missing.
                         if (fetched == null) {
-                            runCatching { none.createNewFile() }
+                            if (source !is ArtSource.FromJellyfin) runCatching { none.createNewFile() }
                         } else {
                             runCatching {
                                 FileOutputStream(file).use { fetched.compress(Bitmap.CompressFormat.JPEG, 90, it) }
@@ -104,7 +110,7 @@ object Artwork {
         }
 
         if (bitmap == null) {
-            synchronized(missing) { missing.add(key) }
+            if (source !is ArtSource.FromJellyfin) synchronized(missing) { missing.add(key) }
             return null
         }
         return bitmap.asImageBitmap().also { memory.put(key, it) }
@@ -119,6 +125,8 @@ object Artwork {
 
     private fun fetch(context: Context, source: ArtSource, sizePx: Int): Bitmap? = when (source) {
         is ArtSource.FromImage -> decodeUri(context, Uri.parse(source.uri), sizePx)
+        is ArtSource.FromJellyfin ->
+            Jellyfin.imageUrl(source.itemId, sizePx)?.let { Jellyfin.download(it) }?.let { decodeBytes(it, sizePx) }
         is ArtSource.FromSong -> embedded(context, source.song, sizePx) ?: folderImage(context, source.song, sizePx)
     }
 
