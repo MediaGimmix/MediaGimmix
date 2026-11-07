@@ -3,6 +3,10 @@ package com.example.mediaplayer
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.widget.Toast
@@ -111,6 +115,8 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The web control server (off at every start; see WebControl.kt). */
     val web = WebControl(app, this)
+    /** The API over Bluetooth (own switch, off at every start like [web]). */
+    val bluetooth = BluetoothControl(app, web)
 
     // ---- Jellyfin (a separate library; see Jellyfin.kt)
     /** Signed-in account (also while locked; its token is never shown). */
@@ -145,7 +151,13 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     private var scanMeta = ScanMeta(0, 0L, false)
 
     init {
+        NetPolicy.init(app)
+        bluetooth.startIfWanted() // "Start with the app" (Settings → Network → Bluetooth control)
+        viewModelScope.launch {
+            artistPhotoIds = withContext(Dispatchers.IO) { ArtistImages.downloadedIds(app) }
+        }
         playback.onPlayCounted = { song -> recordPlay(song) }
+        playback.artFor = { song -> songArt(song) }
         playback.onShuffleChanged = { on -> settings.edit().putBoolean(KEY_SHUFFLE, on).apply() }
         viewModelScope.launch {
             val neverScanned = withContext(Dispatchers.IO) {
@@ -217,6 +229,130 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     fun playlistArt(playlist: Playlist): ArtSource? =
         customArt["playlist:" + playlist.uri]?.let { ArtSource.FromImage(it) }
             ?: playlist.songs.firstOrNull()?.let { ownArt(it) }
+
+    /** An artist's picture: custom image, else the downloaded photo, else the cover of their newest album (year tag). */
+    fun artistArt(artist: ArtistEntry): ArtSource? {
+        customArt["artist:" + artist.key]?.let { return ArtSource.FromImage(it) }
+        if (ArtistImages.id(artist.name) in artistPhotoIds) {
+            return ArtSource.FromFile(ArtistImages.file(getApplication(), artist.name).path)
+        }
+        val newest = artist.songs.filter { LibraryGrouping.albumKey(it) != null }.maxByOrNull { it.year }
+            ?: artist.songs.firstOrNull()
+        return newest?.let { songArt(it) }
+    }
+
+    // ---- artist pictures --------------------------------------------------------------
+
+    /** Ids ([ArtistImages.id]) of artists with a downloaded picture. */
+    var artistPhotoIds by mutableStateOf<Set<String>>(emptySet())
+        private set
+    var artistFetchStatus by mutableStateOf("")
+        private set
+    @Volatile private var onWifi = false
+    private var artistFetch: Job? = null
+
+    private val connectivity = app.getSystemService(ConnectivityManager::class.java)
+    private val wifiCallback = object : ConnectivityManager.NetworkCallback() {
+        private val up = HashSet<Network>()
+        override fun onAvailable(network: Network) {
+            synchronized(up) { up.add(network) }
+            onWifi = true
+            viewModelScope.launch { fetchArtistPictures() }
+        }
+        override fun onLost(network: Network) {
+            onWifi = synchronized(up) { up.remove(network); up.isNotEmpty() }
+        }
+    }
+
+    // After the properties above exist (init blocks run in order).
+    init {
+        runCatching {
+            connectivity.registerNetworkCallback(
+                NetworkRequest.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .build(),
+                wifiCallback,
+            )
+        }
+    }
+
+    /** Looks up pictures for artists that have none, while on Wi-Fi with internet access on. */
+    fun fetchArtistPictures() {
+        if (artistFetch?.isActive == true) return
+        if (!onWifi) {
+            artistFetchStatus = "Waiting for Wi-Fi"
+            return
+        }
+        if (!NetPolicy.internet) {
+            artistFetchStatus = "Internet access is off"
+            return
+        }
+        val names = (artists + jellyfinArtists).map { it.name }
+        if (names.isEmpty()) return
+        val app = getApplication<Application>()
+        artistFetch = viewModelScope.launch {
+            val todo = withContext(Dispatchers.IO) { ArtistImages.pending(app, names) }
+            if (todo.isEmpty()) {
+                artistFetchStatus = "Up to date"
+                return@launch
+            }
+            var done = 0
+            artistFetchStatus = "Looking up ${todo.size} artists…"
+            withContext(Dispatchers.IO) {
+                ArtistImages.fetch(app, todo, keepGoing = { onWifi && NetPolicy.internet }) { id ->
+                    done++
+                    viewModelScope.launch {
+                        artistPhotoIds = artistPhotoIds + id
+                        artistFetchStatus = "Looking up ${todo.size} artists… $done found"
+                    }
+                }
+            }
+            artistFetchStatus = when {
+                !onWifi -> "Stopped: Wi-Fi lost"
+                !NetPolicy.internet -> "Stopped: internet access is off"
+                else -> "Done: $done new pictures"
+            }
+        }
+    }
+
+    fun retryArtistPictures() {
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { ArtistImages.clearMisses(app) }
+            fetchArtistPictures()
+        }
+    }
+
+    fun deleteArtistPictures() {
+        artistFetch?.cancel()
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { ArtistImages.clearAll(app) }
+            artistPhotoIds = emptySet()
+            artistFetchStatus = "Deleted"
+        }
+    }
+
+    fun setInternetAccess(on: Boolean) {
+        NetPolicy.setInternet(getApplication(), on)
+        if (on) {
+            fetchArtistPictures()
+        } else if (artistFetch?.isActive == true) {
+            artistFetch?.cancel()
+            artistFetchStatus = "Stopped: internet access is off"
+        }
+    }
+
+    fun setBluetoothApiAccess(on: Boolean) {
+        NetPolicy.setBluetoothApi(getApplication(), on)
+        if (!on) bluetooth.stop()
+    }
+
+    fun setLocalApiAccess(on: Boolean) {
+        NetPolicy.setLocalApi(getApplication(), on)
+        if (!on) web.stop()
+    }
 
     /** The cover for a playing song: its album's custom image if there is one, else the song's own. */
     fun songArt(song: Song): ArtSource =
@@ -358,6 +494,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
             if (s === jellyfinSongs) {
                 jellyfinAlbums = al
                 jellyfinArtists = ar
+                fetchArtistPictures() // new names to look up (does nothing off Wi-Fi)
             }
         }
     }
@@ -655,6 +792,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
             }
             albums = d.albums
             artists = d.artists
+            fetchArtistPictures()
             recentlyAdded = d.recentlyAdded
             longSongs = d.longSongs
             mostPlayed = d.mostPlayed
@@ -677,6 +815,8 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        bluetooth.stop()
+        runCatching { connectivity.unregisterNetworkCallback(wifiCallback) }
         web.stop()
         yubikey.stop()
         playback.release()

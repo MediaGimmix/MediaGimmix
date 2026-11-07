@@ -53,6 +53,11 @@ sealed interface ArtSource {
         override val key: String get() = "jf:" + itemId
     }
 
+    /** An image file in the app's own storage (downloaded artist pictures). */
+    data class FromFile(val path: String) : ArtSource {
+        override val key: String get() = "file:" + path
+    }
+
     /** A user-chosen image (content URI). */
     data class FromImage(val uri: String) : ArtSource {
         override val key: String get() = "img:" + uri
@@ -125,6 +130,7 @@ object Artwork {
 
     private fun fetch(context: Context, source: ArtSource, sizePx: Int): Bitmap? = when (source) {
         is ArtSource.FromImage -> decodeUri(context, Uri.parse(source.uri), sizePx)
+        is ArtSource.FromFile -> File(source.path).takeIf { it.length() in 1..MAX_IMAGE_BYTES }?.readBytes()?.let { decodeBytes(it, sizePx) }
         is ArtSource.FromJellyfin ->
             Jellyfin.imageUrl(source.itemId, sizePx)?.let { Jellyfin.download(it) }?.let { decodeBytes(it, sizePx) }
         is ArtSource.FromSong -> embedded(context, source.song, sizePx) ?: folderImage(context, source.song, sizePx)

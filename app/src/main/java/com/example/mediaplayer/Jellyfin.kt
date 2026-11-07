@@ -363,6 +363,7 @@ object Jellyfin {
             (token?.let { ", Token=\"$it\"" } ?: "")
 
     private fun open(method: String, url: String, token: String?): HttpURLConnection {
+        NetPolicy.check(url) // Settings → Network: internet access off blocks public servers
         val c = URL(url).openConnection() as HttpURLConnection
         c.requestMethod = method
         c.connectTimeout = 10_000

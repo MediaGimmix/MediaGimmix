@@ -10,6 +10,9 @@ import androidx.compose.ui.graphics.Color
 /** The app's accent: a dark cyan. */
 val DarkCyan = Color(0xFF1A6E5C)
 
+/** A darker shade of the accent (dividers). */
+val DarkAccent = Color(0xFF0F4A3D)
+
 private val DarkColors = darkColorScheme(
     primary = DarkCyan,
     onPrimary = Color.White,

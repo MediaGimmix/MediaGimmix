@@ -1,11 +1,20 @@
 package com.example.mediaplayer
 
 import android.content.Context
+import android.content.Intent
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
+import android.graphics.Bitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import android.view.KeyEvent
 import androidx.annotation.OptIn
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -75,6 +84,9 @@ class Playback(
 
     val queue = PlayQueue()
 
+    /** Remapped hardware buttons (Settings → Buttons); see [handleKey]. */
+    val buttons = ButtonMap(context)
+
     /** True after Stop until playback starts again. */
     var stopped by mutableStateOf(false)
         private set
@@ -139,7 +151,28 @@ class Playback(
     private val session: MediaSession = MediaSession.Builder(context, sessionPlayerFor(player))
         // A unique id avoids a crash if a new Playback is built before the old one is released.
         .setId("player-${System.nanoTime()}")
+        // Remapped media keys while the app is in the background or the screen is off.
+        .setCallback(object : MediaSession.Callback {
+            override fun onMediaButtonEvent(
+                session: MediaSession,
+                controllerInfo: MediaSession.ControllerInfo,
+                intent: Intent,
+            ): Boolean {
+                @Suppress("DEPRECATION")
+                val event = intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT) ?: return false
+                return handleKey(event)
+            }
+        })
         .build()
+
+    /** Media notification / system media player (seek bar comes from the session). */
+    private val notification = PlayerNotification(context, session)
+    private val scope = MainScope()
+    /** The current song's cover for the notification and the session, once loaded. */
+    private var notificationArt: Bitmap? = null
+
+    /** The cover to use for a song (the view model's choice, honouring custom album art). */
+    var artFor: ((Song) -> ArtSource?)? = null
 
     private val listener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -148,6 +181,7 @@ class Playback(
 
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
             this@Playback.playWhenReady = playWhenReady
+            refreshNotification()
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -194,6 +228,7 @@ class Playback(
     }
 
     init {
+        active = this
         attach(player)
         handler.post(ticker)
         refreshDevices()
@@ -242,7 +277,10 @@ class Playback(
                     .setReadTimeoutMs(30_000)
                     .setAllowCrossProtocolRedirects(true),
             ),
-        ) { spec -> Jellyfin.authorize(spec) }
+        ) { spec ->
+            NetPolicy.check(spec.uri) // Settings → Network (runs on the loading thread)
+            Jellyfin.authorize(spec)
+        }
         val p = ExoPlayer.Builder(context, renderers)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSources))
             .setAudioAttributes(
@@ -353,6 +391,7 @@ class Playback(
             idle = true
             player.stop()
             player.clearMediaItems()
+            refreshNotification()
         }
     }
 
@@ -388,6 +427,7 @@ class Playback(
         counted = false
         stopped = true
         outputInfo = outputInfo.copy(input = "", decoder = "")
+        refreshNotification()
     }
 
     fun skipNext() = advance()
@@ -430,6 +470,46 @@ class Playback(
         if (player.playWhenReady && !idle) player.pause() else resume()
     }
 
+    // ---- remapped buttons ---------------------------------------------------
+
+    /**
+     * A hardware key (from the activity while it's on screen, or the media
+     * session otherwise). Returns true when the key is remapped and was used;
+     * false lets it do its usual job.
+     */
+    fun handleKey(event: KeyEvent): Boolean {
+        val action = buttons.actionFor(event.keyCode) ?: return false
+        if (event.action == KeyEvent.ACTION_DOWN && (event.repeatCount == 0 || action.repeats)) perform(action)
+        return true // swallow the key up (and ignored repeats) too
+    }
+
+    fun perform(action: ButtonAction) {
+        when (action) {
+            ButtonAction.NORMAL, ButtonAction.NOTHING -> Unit
+            ButtonAction.PLAY_PAUSE -> togglePause()
+            ButtonAction.PLAY -> resume()
+            ButtonAction.PAUSE -> pause()
+            ButtonAction.NEXT -> skipNext()
+            ButtonAction.PREVIOUS -> skipPrevious()
+            ButtonAction.STOP -> stop()
+            ButtonAction.SHUFFLE -> changeShuffle(!shuffle)
+            ButtonAction.VOLUME_UP -> adjustVolume(AudioManager.ADJUST_RAISE)
+            ButtonAction.VOLUME_DOWN -> adjustVolume(AudioManager.ADJUST_LOWER)
+            ButtonAction.SEEK_FORWARD -> seekBy(SEEK_STEP_MS)
+            ButtonAction.SEEK_BACK -> seekBy(-SEEK_STEP_MS)
+        }
+    }
+
+    private fun adjustVolume(direction: Int) =
+        audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, AudioManager.FLAG_SHOW_UI)
+
+    private fun seekBy(deltaMs: Long) {
+        if (nowPlaying == null || idle) return
+        val d = player.duration
+        val target = (player.currentPosition + deltaMs).coerceAtLeast(0L)
+        player.seekTo(if (d > 0) target.coerceAtMost(d - 500) else target)
+    }
+
     fun seekTo(positionMs: Long) {
         player.seekTo(positionMs)
     }
@@ -442,6 +522,9 @@ class Playback(
     }
 
     fun release() {
+        if (active === this) active = null
+        scope.cancel()
+        notification.cancel()
         handler.removeCallbacks(ticker)
         audioManager.unregisterAudioDeviceCallback(deviceCallback)
         session.release()
@@ -468,9 +551,45 @@ class Playback(
         error = null
         nowPlaying = song
         idle = false
+        notificationArt = null
         player.setMediaItem(mediaItemFor(song))
         player.prepare()
         player.play()
+        refreshNotification()
+        loadNotificationArt(song)
+    }
+
+    /** Posts or removes the media notification for the current state. */
+    private fun refreshNotification() {
+        val song = nowPlaying
+        notification.update(if (stopped) null else song, player.playWhenReady && !idle, notificationArt)
+    }
+
+    /**
+     * Loads [song]'s cover, then shows it in the notification and puts it in the session's metadata
+     * (the system media player's background). Replacing the item only changes metadata: no restart.
+     */
+    private fun loadNotificationArt(song: Song) {
+        scope.launch {
+            val source = artFor?.invoke(song) ?: ArtSource.FromSong(song)
+            val image = Artwork.load(context, source, NOTIFICATION_ART_PX) ?: return@launch
+            if (nowPlaying?.uri != song.uri) return@launch
+            val bitmap = image.asAndroidBitmap()
+            notificationArt = bitmap
+            refreshNotification()
+            val bytes = withContext(Dispatchers.Default) {
+                java.io.ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
+            }
+            if (nowPlaying?.uri != song.uri || player.mediaItemCount == 0) return@launch
+            val current = player.currentMediaItem ?: return@launch
+            if (current.mediaId != song.uri.toString()) return@launch
+            player.replaceMediaItem(
+                player.currentMediaItemIndex,
+                current.buildUpon().setMediaMetadata(
+                    current.mediaMetadata.buildUpon().setArtworkData(bytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER).build(),
+                ).build(),
+            )
+        }
     }
 
     private fun mediaItemFor(song: Song): MediaItem = MediaItem.Builder()
@@ -494,8 +613,15 @@ class Playback(
         onPlayCounted?.invoke(song)
     }
 
-    private companion object {
+    companion object {
         const val RESTART_THRESHOLD_MS = 3_000L
+        const val NOTIFICATION_ART_PX = 512
+
+        /** The live instance, for the notification buttons ([NotificationActionReceiver]). */
+        @Volatile
+        var active: Playback? = null
+            private set
+        const val SEEK_STEP_MS = 10_000L
         const val PLAY_CHECK_INTERVAL_MS = 2_000L
         const val PLAY_COUNT_MAX_MS = 4 * 60_000L
         const val PLAY_COUNT_UNKNOWN_MS = 30_000L

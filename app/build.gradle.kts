@@ -1,8 +1,20 @@
+import java.time.LocalDateTime
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+// Shown at the bottom of Settings: which commit a build came from ("+" = uncommitted changes).
+val gitCommit: String = runCatching {
+    val hash = providers.exec { commandLine("git", "rev-parse", "--short", "HEAD") }
+        .standardOutput.asText.get().trim()
+    val dirty = providers.exec { commandLine("git", "status", "--porcelain") }
+        .standardOutput.asText.get().isNotBlank()
+    hash + if (dirty) "+" else ""
+}.getOrDefault("unknown")
+val buildTime: String = LocalDateTime.now().withSecond(0).withNano(0).toString().replace('T', ' ')
 
 android {
     namespace = "com.example.mediaplayer"
@@ -17,6 +29,8 @@ android {
         versionName = "0.1.0"
         // Native audio (OpenSL ES / AAudio) is built for 64-bit ARM only: the FiiO JM21.
         ndk { abiFilters += "arm64-v8a" }
+        buildConfigField("String", "GIT_COMMIT", "\"$gitCommit\"")
+        buildConfigField("String", "BUILD_TIME", "\"$buildTime\"")
     }
 
     externalNativeBuild {
@@ -43,6 +57,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

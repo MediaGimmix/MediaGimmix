@@ -66,6 +66,11 @@ class PlayQueue {
 
     fun clearHistory() = history.clear()
 
+    /** The last [n] songs played, oldest first. */
+    fun recentHistory(n: Int): List<Song> = history.toList().takeLast(n)
+
+    val historySize: Int get() = history.size
+
     /** Replaces everything: [songs] become the general queue; play next and history are cleared. */
     fun replaceAll(songs: List<Song>) {
         general = songs

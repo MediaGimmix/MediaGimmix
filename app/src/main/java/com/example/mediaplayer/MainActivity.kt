@@ -2,6 +2,8 @@ package com.example.mediaplayer
 
 import android.content.Intent
 import android.os.Bundle
+import android.view.KeyEvent
+import androidx.activity.viewModels
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -22,6 +24,13 @@ class MainActivity : ComponentActivity() {
     /** Bumped when "Open on wake" brings the app back, to play the splash again. */
     private var splashReplays by mutableIntStateOf(0)
 
+    /** Same instance LibraryScreen gets from viewModel(). */
+    private val vm: LibraryViewModel by viewModels()
+
+    /** Remapped buttons while the app is on screen (volume keys only reach us here). */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+        vm.playback.handleKey(event) || super.dispatchKeyEvent(event)
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.getBooleanExtra(WakeLaunch.EXTRA_SHOW_SPLASH, false)) splashReplays++
@@ -32,6 +41,12 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         WakeLaunch.startIfEnabled(this) // in case Android stopped it
+        // Android 13+: the media notification needs permission (asked once; "Don't allow" is respected).
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
+        }
         setContent {
             MediaPlayerTheme {
                 // Saved, so rotating the screen doesn't show the splash again.

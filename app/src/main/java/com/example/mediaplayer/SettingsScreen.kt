@@ -1,6 +1,15 @@
 package com.example.mediaplayer
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -35,6 +44,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.activity.compose.BackHandler
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.clickable
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.text.KeyboardOptions
@@ -52,9 +63,17 @@ fun SettingsScreen(
     onRegrantFolder: (String) -> Unit,
     onBack: () -> Unit,
 ) {
+    var category by rememberSaveable { mutableStateOf<SettingsCategory?>(null) }
     var page by rememberSaveable { mutableStateOf<SettingsPage?>(null) }
-    // Back on a page goes to the list of pages (this handler wins over the library screen's).
-    BackHandler(enabled = page != null) { page = null }
+    // Back: page -> its category -> the category list (these win over the library screen's handler).
+    val goBack = {
+        when {
+            page != null -> page = null
+            category != null -> category = null
+            else -> onBack()
+        }
+    }
+    BackHandler(enabled = page != null || category != null) { goBack() }
     var confirmRemove by remember { mutableStateOf<String?>(null) }
     var newDelimiter by remember { mutableStateOf("") }
     var newWhitelisted by remember { mutableStateOf("") }
@@ -68,15 +87,23 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                TextButton(onClick = { if (page == null) onBack() else page = null }) { Text("← Back") }
-                Text(page?.title ?: "Settings", style = MaterialTheme.typography.titleMedium)
+                TextButton(onClick = goBack) { Text("← Back") }
+                Text(page?.title ?: category?.title ?: "Settings", style = MaterialTheme.typography.titleMedium)
             }
         }
 
         when (page) {
             null -> {
-                items(SettingsPage.entries) { p ->
-                    SettingsPageRow(p, onClick = { page = p })
+                val c = category
+                if (c == null) {
+                    items(SettingsCategory.entries) { cat ->
+                        SettingsPageRow(cat.title, cat.summary, onClick = { category = cat })
+                    }
+                    item { AboutInfo(vm) }
+                } else {
+                    items(c.pages) { p ->
+                        SettingsPageRow(p.title, p.summary, onClick = { page = p })
+                    }
                 }
             }
             SettingsPage.LIBRARY -> {
@@ -220,6 +247,15 @@ fun SettingsScreen(
                     }
                 }
             }
+            SettingsPage.BUTTONS -> {
+                item { ButtonSettings(vm.playback.buttons) }
+            }
+            SettingsPage.NETWORK -> {
+                item { NetworkSettings(vm) }
+            }
+            SettingsPage.ARTIST_ART -> {
+                item { ArtistArtworkSettings(vm) }
+            }
             SettingsPage.JELLYFIN -> {
                 item { JellyfinSettings(vm) }
             }
@@ -294,6 +330,9 @@ fun SettingsScreen(
             }
             SettingsPage.SECURITY -> {
                 item { SecurityKeySettings(vm) }
+            }
+            SettingsPage.BLUETOOTH -> {
+                item { BluetoothControlSettings(vm) }
             }
             SettingsPage.WEB -> {
                 item { WebControlSettings(vm.web) }
@@ -604,6 +643,7 @@ private fun SecurityKeySettings(vm: LibraryViewModel) {
 @Composable
 private fun WebControlSettings(web: WebControl) {
     var portText by rememberSaveable { mutableStateOf(web.port.toString()) }
+    var limitText by rememberSaveable { mutableStateOf(web.listLimit.toString()) }
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Web control server", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
@@ -616,7 +656,7 @@ private fun WebControlSettings(web: WebControl) {
         )
         web.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
         if (web.running) {
-            Text("Open in a browser on the same network:", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+            Text("API address on the same network:", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
             val addresses = web.addresses()
             if (addresses.isEmpty()) Text("No network address (not on Wi-Fi?)", style = MaterialTheme.typography.bodyMedium)
             addresses.forEach { SelectionContainer { Text(it, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.secondary) } }
@@ -630,7 +670,7 @@ private fun WebControlSettings(web: WebControl) {
         }
         OutlinedButton(onClick = { web.regenerateKey() }) { Text("New key") }
         Note(
-            "Send it as an X-Api-Key header or ?key=... on API calls. The web page asks for it once and remembers it.",
+            "Send it as an X-Api-Key header or ?key=... on API calls.",
             horizontalPadding = 0,
         )
 
@@ -647,11 +687,238 @@ private fun WebControlSettings(web: WebControl) {
                 Text("Apply")
             }
         }
+        SubTitleInline("Most items per reply")
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = limitText,
+                onValueChange = { limitText = it.filter(Char::isDigit).take(4) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(1f),
+            )
+            Button(
+                onClick = { limitText.toIntOrNull()?.let { web.changeListLimit(it); limitText = web.listLimit.toString() } },
+                enabled = limitText.toIntOrNull() != web.listLimit,
+            ) { Text("Apply") }
+        }
         Note(
-            "The page is app/src/main/assets/web/index.html in the project. To change it without rebuilding, put your " +
-                "own index.html in Android/data/com.example.mediaplayer/files/web/ on the phone; it wins over the built-in one.",
+            "No API reply lists more songs, albums, artists or playlists than this (1 to ${WebControl.MAX_LIST_LIMIT}), " +
+                "so a companion app or script can never pull the whole library. Apps can ask for fewer, not more. " +
+                "The queue always sends the last ${WebControl.QUEUE_BACK} played and up to ${WebControl.QUEUE_AHEAD} coming up.",
             horizontalPadding = 0,
         )
+        Note(
+            "The endpoint list is at the top of WebControl.kt in the project.",
+            horizontalPadding = 0,
+        )
+    }
+}
+
+@Composable
+private fun NetworkSettings(vm: LibraryViewModel) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        SwitchRow(
+            "Internet access",
+            "Requests to the open internet: artist pictures, and a Jellyfin server on a public address. " +
+                "Off = nothing leaves the local network. A Jellyfin server at home keeps working.",
+            NetPolicy.internet,
+        ) { vm.setInternetAccess(it) }
+        SwitchRow(
+            "Local network requests",
+            "Companion apps, scripts and anything else calling the web control API. Off = the API server " +
+                "stops and can't be switched on.",
+            NetPolicy.localApi,
+        ) { vm.setLocalApiAccess(it) }
+        SwitchRow(
+            "Bluetooth requests",
+            "The same API over Bluetooth, from a paired phone (the companion app). Off = Bluetooth control " +
+                "stops and can't be switched on. Separate from the local network switch.",
+            NetPolicy.bluetoothApi,
+        ) { vm.setBluetoothApiAccess(it) }
+    }
+}
+
+@Composable
+private fun ArtistArtworkSettings(vm: LibraryViewModel) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text(
+            "${"%,d".format(vm.artistPhotoIds.size)} downloaded" +
+                vm.artistFetchStatus.takeIf { it.isNotEmpty() }?.let { " · $it" }.orEmpty(),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
+            OutlinedButton(onClick = { vm.retryArtistPictures() }) { Text("Look again") }
+            OutlinedButton(onClick = { vm.deleteArtistPictures() }) { Text("Delete all") }
+        }
+        Note(
+            "Looked up on Deezer by artist name whenever the app is on Wi-Fi (exact name matches only). " +
+                "Without a picture, an artist shows the cover of their newest album (by year tag). " +
+                "Long-press an artist to use your own image instead. \"Look again\" retries artists that had no picture.",
+            horizontalPadding = 0,
+        )
+    }
+}
+
+/** Version and other details, at the bottom of the category list. Long-press a value to copy it. */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+@Composable
+private fun AboutInfo(vm: LibraryViewModel) {
+    val stats = vm.stats
+    val jellyfinSongs = vm.jellyfinSongs.size
+    Column(modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 24.dp)) {
+        Text("About", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.secondary)
+        SelectionContainer {
+            Column {
+                InfoRowPadded("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · ${BuildConfig.BUILD_TYPE}")
+                InfoRowPadded("Commit", BuildConfig.GIT_COMMIT)
+                InfoRowPadded("Built", BuildConfig.BUILD_TIME)
+                InfoRowPadded("Package", BuildConfig.APPLICATION_ID)
+                InfoRowPadded("Device", "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
+                InfoRowPadded(
+                    "Android",
+                    "${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT}) · " +
+                        android.os.Build.SUPPORTED_ABIS.firstOrNull().orEmpty(),
+                )
+                InfoRowPadded("Audio output", vm.playback.outputMode.label)
+                InfoRowPadded(
+                    "Library",
+                    "${"%,d".format(stats.songs)} songs · ${"%,d".format(stats.albums)} albums · " +
+                        "${"%,d".format(stats.artists)} artists",
+                )
+                if (jellyfinSongs > 0) InfoRowPadded("Jellyfin", "${"%,d".format(jellyfinSongs)} songs")
+                InfoRowPadded("Artist pictures", "%,d".format(vm.artistPhotoIds.size))
+                InfoRowPadded(
+                    "Network",
+                    listOf(
+                        if (NetPolicy.internet) "internet on" else "internet off",
+                        if (NetPolicy.localApi) "local API allowed" else "local API off",
+                        if (NetPolicy.bluetoothApi) "Bluetooth API allowed" else "Bluetooth API off",
+                    ).joinToString(" · "),
+                )
+                InfoRowPadded("Media3", androidx.media3.common.MediaLibraryInfo.VERSION)
+                InfoRowPadded("Kotlin", KotlinVersion.CURRENT.toString())
+            }
+        }
+    }
+}
+
+@Composable
+private fun BluetoothControlSettings(vm: LibraryViewModel) {
+    val bt = vm.bluetooth
+    // Android 12+: "Nearby devices" permission, asked when switching on.
+    val askPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) bt.setEnabled(true)
+    }
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Bluetooth control", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            Switch(checked = bt.running, onCheckedChange = { on ->
+                if (on && !bt.hasPermission() && android.os.Build.VERSION.SDK_INT >= 31) {
+                    askPermission.launch(android.Manifest.permission.BLUETOOTH_CONNECT)
+                } else {
+                    bt.setEnabled(on)
+                }
+            })
+        }
+        Note(
+            "Runs only while the app is open. A paired phone with the companion app can then use the same API as " +
+                "Web control, without Wi-Fi. Pair the phones in Android's Bluetooth settings first.",
+            horizontalPadding = 0,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                Text("Start with the app", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Switch Bluetooth control on whenever the app opens. Never overrides the \"Bluetooth requests\" " +
+                        "switch in Network switches: when that's off, Bluetooth control stays off.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = bt.autoStart, onCheckedChange = { bt.changeAutoStart(it) })
+        }
+        bt.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
+        if (bt.running) {
+            Text(
+                if (bt.connected.isEmpty()) "Waiting for a paired phone…" else "Connected: " + bt.connected.joinToString(", "),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        SubTitleInline("Access key")
+        SelectionContainer { Text(vm.web.accessKey, style = MaterialTheme.typography.bodyLarge) }
+        Note(
+            "The same key as Web control (change it there). The companion app needs it in its settings.",
+            horizontalPadding = 0,
+        )
+    }
+}
+
+@Composable
+private fun SwitchRow(title: String, description: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 6.dp)) {
+        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+/** Two columns of button → action dropdowns (see [HwButton.column]) split by a dark accent line. */
+@Composable
+private fun ButtonSettings(buttons: ButtonMap) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+            ButtonColumn(buttons, 0, Modifier.weight(1f).padding(end = 12.dp))
+            Box(modifier = Modifier.fillMaxHeight().width(2.dp).background(DarkAccent))
+            ButtonColumn(buttons, 1, Modifier.weight(1f).padding(start = 12.dp))
+        }
+        OutlinedButton(
+            onClick = { buttons.resetAll() },
+            modifier = Modifier.padding(top = 16.dp),
+        ) { Text("Reset to normal") }
+        Note(
+            "Normal = the button does its usual job. Volume buttons can only be remapped while the app is on " +
+                "screen; media buttons (on the device, headphones or Bluetooth) also work in the background " +
+                "while music is loaded.",
+            horizontalPadding = 0,
+        )
+    }
+}
+
+@Composable
+private fun ButtonColumn(buttons: ButtonMap, column: Int, modifier: Modifier) {
+    Column(modifier = modifier) {
+        HwButton.entries.filter { it.column == column }.forEach { b ->
+            Text(b.label, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+            ActionDropdown(buttons[b]) { buttons.set(b, it) }
+        }
+    }
+}
+
+@Composable
+private fun ActionDropdown(current: ButtonAction, onPick: (ButtonAction) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box(modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)) {
+        OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(current.label, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("\u25BE")
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            ButtonAction.entries.forEach { a ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            a.label,
+                            color = if (a == current) MaterialTheme.colorScheme.secondary else Color.Unspecified,
+                        )
+                    },
+                    onClick = { onPick(a); open = false },
+                )
+            }
+        }
     }
 }
 
@@ -674,27 +941,46 @@ private fun InfoRowPadded(label: String, value: String) {
 }
 
 /** The pages of Settings, listed on its first screen. */
+/** A settings page; each belongs to one [SettingsCategory]. */
 enum class SettingsPage(val title: String, val summary: String) {
-    LIBRARY("Library", "Music folders, scanning, library totals"),
     AUDIO("Audio", "Output mode, output device, what's playing"),
+    BUTTONS("Buttons", "Remap the volume and media buttons"),
+    NETWORK("Network switches", "Internet access, local network requests"),
     JELLYFIN("Jellyfin", "Server, sign in, sync"),
+    WEB("Web control", "Control the player through an HTTP API"),
+    BLUETOOTH("Bluetooth control", "The same API for a paired phone, over Bluetooth"),
+    LIBRARY("Library", "Music folders, scanning, library totals"),
     ARTISTS("Artist names", "Splitting artist tags, whitelist"),
-    SECURITY("YubiKey", "Lock the Jellyfin sign-in behind security keys"),
-    WEB("Web control", "Control the player from a browser or the API"),
-    ARTWORK("Artwork", "Cover cache"),
+    ARTWORK("Artwork cache", "Album and playlist covers"),
+    ARTIST_ART("Artist artwork", "Downloaded artist pictures"),
     STARTUP("Startup", "Splash screen, open on wake"),
+    SECURITY("YubiKey", "Lock the Jellyfin sign-in behind security keys"),
+}
+
+/** The top level of Settings. New pages go into one of these (the user names the category). */
+enum class SettingsCategory(val title: String, val summary: String, val pages: List<SettingsPage>) {
+    AUDIO("Audio", "Output, buttons", listOf(SettingsPage.AUDIO, SettingsPage.BUTTONS)),
+    NETWORK(
+        "Network", "Network switches, Jellyfin, web and Bluetooth control",
+        listOf(SettingsPage.NETWORK, SettingsPage.JELLYFIN, SettingsPage.WEB, SettingsPage.BLUETOOTH),
+    ),
+    LIBRARY(
+        "Library", "Folders, artist names, artwork",
+        listOf(SettingsPage.LIBRARY, SettingsPage.ARTISTS, SettingsPage.ARTWORK, SettingsPage.ARTIST_ART),
+    ),
+    SYSTEM("System", "Startup, YubiKey", listOf(SettingsPage.STARTUP, SettingsPage.SECURITY)),
 }
 
 @Composable
-private fun SettingsPageRow(page: SettingsPage, onClick: () -> Unit) {
+private fun SettingsPageRow(title: String, summary: String, onClick: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
-        Text(page.title, style = MaterialTheme.typography.titleMedium)
-        Text(page.summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     HorizontalDivider()
 }

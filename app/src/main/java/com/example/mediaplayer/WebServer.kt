@@ -80,15 +80,34 @@ class WebServer(private val port: Int, private val handler: (Request) -> Respons
         client.use { sock ->
             runCatching {
                 sock.soTimeout = 15_000
-                val input = BufferedInputStream(sock.getInputStream())
-                val request = readRequest(input) ?: return
-                val response = runCatching { handler(request) }.getOrElse { e ->
-                    Response.json("""{"error":${quote(e.message ?: e.javaClass.simpleName)}}""", 500)
-                }
-                write(sock.getOutputStream(), response)
+                serveOne(BufferedInputStream(sock.getInputStream()), sock.getOutputStream(), handler, keepAlive = false)
             }
         }
     }
+
+    companion object {
+        /** A JSON string literal. */
+        fun quote(s: String): String = org.json.JSONObject.quote(s)
+
+        /**
+         * Serves requests from a stream until it ends (Bluetooth: one long-lived link, many requests).
+         * Every reply carries Content-Length; one without (an unknown-length download) ends the link.
+         */
+        fun serveStream(input: InputStream, output: OutputStream, handler: (Request) -> Response) {
+            val buffered = BufferedInputStream(input)
+            while (serveOne(buffered, output, handler, keepAlive = true)) Unit
+        }
+
+        /** Reads one request and writes its reply. False when the stream ended or must be closed. */
+        private fun serveOne(input: InputStream, output: OutputStream, handler: (Request) -> Response, keepAlive: Boolean): Boolean {
+            val request = readRequest(input) ?: return false
+            val response = runCatching { handler(request) }.getOrElse { e ->
+                Response.json("""{"error":${quote(e.message ?: e.javaClass.simpleName)}}""", 500)
+            }
+            val keep = keepAlive && (response.stream == null || response.length >= 0)
+            write(output, response, keep)
+            return keep
+        }
 
     private fun readRequest(input: InputStream): Request? {
         val requestLine = readLine(input) ?: return null
@@ -131,12 +150,12 @@ class WebServer(private val port: Int, private val handler: (Request) -> Respons
         return out.toString("ISO-8859-1")
     }
 
-    private fun write(out: OutputStream, r: Response) {
+    private fun write(out: OutputStream, r: Response, keepAlive: Boolean) {
         val length = if (r.stream != null) r.length else r.body.size.toLong()
         val head = StringBuilder()
             .append("HTTP/1.1 ").append(r.status).append(' ').append(reason(r.status)).append("\r\n")
             .append("Content-Type: ").append(r.contentType).append("\r\n")
-            .append("Connection: close\r\n")
+            .append(if (keepAlive) "Connection: keep-alive\r\n" else "Connection: close\r\n")
             .append("Cache-Control: no-store\r\n")
         if (length >= 0) head.append("Content-Length: ").append(length).append("\r\n")
         for ((k, v) in r.headers) head.append(k).append(": ").append(v).append("\r\n")
@@ -162,8 +181,5 @@ class WebServer(private val port: Int, private val handler: (Request) -> Respons
         else -> if (code >= 500) "Server Error" else "Status"
     }
 
-    companion object {
-        /** A JSON string literal. */
-        fun quote(s: String): String = org.json.JSONObject.quote(s)
     }
 }

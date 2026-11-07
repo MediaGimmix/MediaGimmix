@@ -45,6 +45,11 @@ Transport buttons (optional; without a file the built-in Material icon is used)
   button_next.png          Next
   button_stop.png          Stop
   button_shuffle.png       Shuffle (shown dimmed when shuffle is off)
+  button_search.png        Search (top bar, left of Settings)
+
+Notification (optional): notification.png is the small icon of the media notification
+(white on transparent works best; Android tints it). Without it Android's play icon is used.
+The notification's buttons use the button_*.png files above when present.
   These are shown in their own colours, not tinted.
 
 The placeholders are Noto Color Emoji (Apache 2.0 / OFL).

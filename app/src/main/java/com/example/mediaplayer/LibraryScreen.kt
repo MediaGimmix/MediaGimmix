@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -85,6 +86,17 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
     var showNowPlaying by rememberSaveable { mutableStateOf(false) }
     // Which album/playlist a custom cover is being picked for ("album:<key>" / "playlist:<uri>").
     var pendingArtKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var showSearch by rememberSaveable { mutableStateOf(false) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var searchJellyfin by rememberSaveable { mutableStateOf(false) }
+    // An artist/album opened from search: going back returns to the results.
+    var fromSearch by rememberSaveable { mutableStateOf(false) }
+    val backToSearch = {
+        fromSearch = false
+        section = null
+        openKey = null
+        showSearch = true
+    }
 
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -117,15 +129,19 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
     }
 
     val openSection: (LibrarySection?) -> Unit = {
-        section = it
-        openKey = null
+        if (fromSearch) backToSearch() else {
+            section = it
+            openKey = null
+        }
     }
 
-    BackHandler(enabled = showNowPlaying || showSettings || tab == 1 || section != null) {
+    BackHandler(enabled = showNowPlaying || showSettings || showSearch || tab == 1 || section != null) {
         when {
             showNowPlaying -> showNowPlaying = false
             showSettings -> showSettings = false
+            showSearch -> showSearch = false
             tab == 1 -> tab = 0
+            fromSearch -> backToSearch()
             openKey != null -> openKey = parentKey(section, openKey!!)
             else -> section = null
         }
@@ -143,12 +159,16 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
                 onClose = { showNowPlaying = false },
                 onGoToAlbum = { key ->
                     showNowPlaying = false
+                    showSearch = false
+                    fromSearch = false
                     tab = 0
                     section = LibrarySection.ALBUMS
                     openKey = key
                 },
                 onGoToArtist = { key ->
                     showNowPlaying = false
+                    showSearch = false
+                    fromSearch = false
                     tab = 0
                     section = LibrarySection.ARTISTS
                     openKey = key
@@ -169,11 +189,39 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
                 )
             }
 
+            showSearch -> Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                SearchScreen(
+                    vm = vm,
+                    query = searchQuery,
+                    onQueryChange = { searchQuery = it },
+                    jellyfin = searchJellyfin,
+                    onJellyfinChange = { searchJellyfin = it },
+                    onBack = { showSearch = false },
+                    onOpenArtist = { key, jelly ->
+                        showSearch = false
+                        fromSearch = true
+                        tab = 0
+                        section = if (jelly) LibrarySection.JELLYFIN else LibrarySection.ARTISTS
+                        openKey = if (jelly) "artists/$key" else key
+                    },
+                    onOpenAlbum = { key, jelly ->
+                        showSearch = false
+                        fromSearch = true
+                        tab = 0
+                        section = if (jelly) LibrarySection.JELLYFIN else LibrarySection.ALBUMS
+                        openKey = if (jelly) "albums/$key" else key
+                    },
+                )
+            }
+
             else -> {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     TabRow(selectedTabIndex = tab, modifier = Modifier.weight(1f)) {
                         Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Library") })
                         Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Queue") })
+                    }
+                    IconButton(onClick = { showSearch = true }) {
+                        TransportIcon(Icons.Filled.Search, "button_search", contentDescription = "Search")
                     }
                     IconButton(onClick = { showSettings = true }) {
                         Icon(Icons.Filled.Settings, contentDescription = "Settings")
@@ -189,7 +237,7 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
                             section = section,
                             openKey = openKey,
                             onOpenSection = openSection,
-                            onOpenKey = { openKey = it },
+                            onOpenKey = { if (fromSearch) backToSearch() else openKey = it },
                             onAddFolder = addFolder,
                             onPickImage = pickImage,
                         )
@@ -319,7 +367,10 @@ private fun LibraryContent(
         LibrarySection.ARTISTS -> {
             val open = openKey?.let { k -> vm.artists.firstOrNull { it.key == k } }
             if (open != null) {
-                SongList(open.name, artistSummary(open), open.songs, playback, onBack = backToSection, rowArt = rowArt)
+                SongList(
+                    open.name, artistSummary(open), open.songs, playback,
+                    onBack = backToSection, art = vm.artistArt(open), rowArt = rowArt,
+                )
             } else {
                 GroupList(
                     title = "Artists",
@@ -330,6 +381,8 @@ private fun LibraryContent(
                     subtitle = { artistSummary(it) },
                     onOpen = { onOpenKey(it.key) },
                     onBack = backToMenu,
+                    art = { vm.artistArt(it) },
+                    actions = { artistActions(vm, it, onPickImage) },
                 )
             }
         }
@@ -459,7 +512,10 @@ private fun JellyfinContent(
         "artists" -> {
             val open = item?.let { k -> vm.jellyfinArtists.firstOrNull { it.key == k } }
             if (open != null) {
-                SongList(open.name, artistSummary(open), open.songs, playback, onBack = up, rowArt = rowArt)
+                SongList(
+                    open.name, artistSummary(open), open.songs, playback,
+                    onBack = up, art = vm.artistArt(open), rowArt = rowArt,
+                )
             } else {
                 GroupList(
                     title = "Artists",
@@ -470,6 +526,8 @@ private fun JellyfinContent(
                     subtitle = { artistSummary(it) },
                     onOpen = { onOpenKey("artists/" + it.key) },
                     onBack = toMenu,
+                    art = { vm.artistArt(it) },
+                    actions = { artistActions(vm, it, onPickImage = null) },
                 )
             }
         }
@@ -512,11 +570,11 @@ private fun JellyfinContent(
 private fun playlistSummary(pl: Playlist): String =
     "${pl.songs.size} songs" + if (pl.missing > 0) " · ${pl.missing} not found" else ""
 
-private fun albumSummary(a: AlbumEntry): String =
+internal fun albumSummary(a: AlbumEntry): String =
     listOfNotNull(a.artist, if (a.year > 0) a.year.toString() else null, "${a.songs.size} songs")
         .joinToString(" · ")
 
-private fun artistSummary(a: ArtistEntry): String =
+internal fun artistSummary(a: ArtistEntry): String =
     "${a.songs.size} songs" + if (a.albumCount > 0) " · ${a.albumCount} albums" else ""
 
 // ---- menu ------------------------------------------------------------------
@@ -584,7 +642,7 @@ private fun StatusText(text: String) {
 
 /** A menu entry. With [icon], the icon from assets/icons/<icon>.png sits on the left. */
 @Composable
-private fun MenuRow(label: String, subtitle: String, enabled: Boolean, onClick: () -> Unit, icon: String? = null) {
+internal fun MenuRow(label: String, subtitle: String, enabled: Boolean, onClick: () -> Unit, icon: String? = null) {
     val alpha = if (enabled) 1f else 0.4f
     Row(
         modifier = Modifier
@@ -719,6 +777,8 @@ private fun <T> GroupList(
     subtitle: (T) -> String,
     onOpen: (T) -> Unit,
     onBack: () -> Unit,
+    art: ((T) -> ArtSource?)? = null,
+    actions: (T) -> List<MenuAction> = { emptyList() },
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         ListHeader(title = "$title (${"%,d".format(entries.size)})", onBack = onBack)
@@ -732,9 +792,64 @@ private fun <T> GroupList(
         }
         LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
             items(entries, key = key) { e ->
-                MenuRow(label = label(e), subtitle = subtitle(e), enabled = true, onClick = { onOpen(e) })
+                if (art != null) {
+                    PictureRow(label(e), subtitle(e), art(e), actions = { actions(e) }, onClick = { onOpen(e) })
+                } else {
+                    MenuRow(label = label(e), subtitle = subtitle(e), enabled = true, onClick = { onOpen(e) })
+                }
             }
         }
+    }
+}
+
+/** A row with a small picture (artists). Tap opens; long-press shows [actions]. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun PictureRow(
+    label: String,
+    subtitle: String,
+    art: ArtSource?,
+    actions: () -> List<MenuAction>,
+    onClick: () -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .combinedClickable(onClick = onClick, onLongClick = { menuOpen = true })
+                .padding(start = 12.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RowCover(art, label)
+            Column(modifier = Modifier.weight(1f)) {
+                Text(label, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (subtitle.isNotEmpty()) {
+                    Text(
+                        subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            MenuItems(actions(), onDismiss = { menuOpen = false })
+        }
+    }
+}
+
+/** Long-press actions for an artist. */
+internal fun artistActions(vm: LibraryViewModel, a: ArtistEntry, onPickImage: ((String) -> Unit)?): List<MenuAction> {
+    val playback = vm.playback
+    val artKey = "artist:" + a.key
+    return buildList {
+        add(MenuAction("Play") { playback.playAll(a.songs, shuffled = false) })
+        add(MenuAction("Shuffle") { playback.playAll(a.songs, shuffled = true) })
+        if (onPickImage != null) add(MenuAction("Set custom image...") { onPickImage(artKey) })
+        if (artKey in vm.customArt) add(MenuAction("Use downloaded or album picture") { vm.setCustomArt(artKey, null) })
     }
 }
 
@@ -824,7 +939,7 @@ private fun ListHeader(title: String, onBack: () -> Unit) {
 }
 
 @Composable
-private fun SongRow(
+internal fun SongRow(
     song: Song,
     subtitle: String,
     art: ArtSource?,
