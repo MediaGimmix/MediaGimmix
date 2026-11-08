@@ -88,8 +88,8 @@ The app icon is the outline of the startup logo (`splash.png` / `app_icon.png`).
 ## Other files
 
 - `CLAUDE.md`: architecture notes for the AI assistant (and for you)
-- `add-*.sh`, `SETUP-NOTES.txt`: setup scripts from the project's early days, kept for history; not needed to build
 
 ## License
 
-No license has been chosen yet.
+[MIT](LICENSE) © 2026 Skye Parker. Third-party artwork keeps its own license: Material Symbols and Noto
+Color Emoji are Apache License 2.0 (Noto Emoji also SIL OFL).

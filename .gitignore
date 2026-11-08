@@ -32,3 +32,8 @@ Thumbs.db
 # ---- Tooling ----
 .source-backups/
 .claude/settings.local.json
+
+# ---- Old step-by-step setup scripts (removed from the repo) ----
+/add-*.sh
+/run-latest.sh
+/SETUP-NOTES.txt
