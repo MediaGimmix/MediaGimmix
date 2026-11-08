@@ -1,11 +1,21 @@
 # Media Player (+ Player Remote)
 
-An offline-first Android music player written in Kotlin and Jetpack Compose, built for a
-**FiiO JM21** digital audio player (Android 13, no Google services), plus **Player Remote**, a
-companion app that controls it from a phone over Wi-Fi or Bluetooth.
+**No artwork in this repository is AI-generated.** Icons are Google's Material Symbols and Noto Color
+Emoji (both Apache 2.0) or the author's own art; every image can be swapped for your own (see
+[Icons and artwork](#icons-and-artwork)).
 
-The project was "vibecoded": written together with an AI coding assistant (Claude). `CLAUDE.md`
-holds the architecture notes it works from, and they're also the best map of the code.
+This project is a "mock" clone of **Poweramp**: a music player built around the Poweramp features I
+specifically wanted, plus a few of my own, with its look inspired by **FiiO**'s design language. It is
+an independent personal project, not affiliated with or endorsed by Poweramp or FiiO, and shares no
+code or artwork with them.
+
+It's an offline-first Android player written in Kotlin and Jetpack Compose, built for a **FiiO JM21**
+digital audio player (Android 13, no Google services), plus **Player Remote**, a companion app that
+controls it from a phone over Wi-Fi or Bluetooth.
+
+The project was "vibecoded": the code was written entirely by an AI coding assistant (Claude), with my
+guidance. `CLAUDE.md` holds the architecture notes it works
+from, and they're also the best map of the code.
 
 No Google libraries or services at runtime, no analytics, no telemetry. The only network
 traffic is to servers you set up (Jellyfin), Deezer for artist pictures (optional, can be

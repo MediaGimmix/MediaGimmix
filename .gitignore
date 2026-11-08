@@ -32,6 +32,8 @@ Thumbs.db
 # ---- Tooling ----
 .source-backups/
 .claude/settings.local.json
+# Private notes for Claude Code (device serials etc.)
+CLAUDE.local.md
 
 # ---- Old step-by-step setup scripts (removed from the repo) ----
 /add-*.sh
