@@ -60,6 +60,8 @@ data class SongInfo(
     val album: String?,
     val albumId: String?,
     val durationMs: Long,
+    /** File size on the player; 0 = unknown. */
+    val sizeBytes: Long = 0L,
 ) {
     val subtitle get() = listOfNotNull(artist, album).joinToString(" · ")
 
@@ -71,6 +73,7 @@ data class SongInfo(
             album = o.optStringOrNull("album"),
             albumId = o.optStringOrNull("albumId"),
             durationMs = o.optLong("durationMs"),
+            sizeBytes = o.optLong("sizeBytes"),
         )
     }
 }
@@ -128,6 +131,8 @@ class QueueInfo(
     val historyTotal: Int,
     val playNextTotal: Int,
     val generalTotal: Int,
+    /** Position of [general]'s first song in the player's whole general queue. */
+    val generalStart: Int = 0,
 )
 
 /** One page of a list, plus the full size the player reported (X-Total-Count). */
@@ -163,6 +168,7 @@ class Api(private val c: Connection) {
             historyTotal = o.optInt("historyTotal"),
             playNextTotal = o.optInt("playNextTotal"),
             generalTotal = o.optInt("generalTotal"),
+            generalStart = o.optInt("generalStart"),
         )
     }
 
@@ -170,6 +176,58 @@ class Api(private val c: Connection) {
     fun songArtBitmap(songId: String, sizePx: Int): android.graphics.Bitmap? {
         val r = raw("GET", "songs/$songId/art?size=$sizePx")
         return if (r.code == 200) BitmapFactory.decodeByteArray(r.body, 0, r.body.size) else null
+    }
+
+    /**
+     * Downloads a song's file into [dest] (the player sends the original file). [progress]: bytes so far,
+     * total (-1 if unknown). Blocking; throws on failure (dest may be partly written).
+     */
+    fun download(songId: String, dest: java.io.File, progress: (Long, Long) -> Unit) {
+        val path = "songs/$songId/download"
+        // Once the size is known (first chunk), make sure it fits; a 0-byte file is checked up front by the caller.
+        var checkedSpace = false
+        val guarded: (Long, Long) -> Unit = { done, total ->
+            if (!checkedSpace && total > 0) {
+                checkedSpace = true
+                Storage.requireRoom(dest.parentFile ?: dest, total - done)
+            }
+            progress(done, total)
+        }
+        dest.outputStream().buffered().use { out ->
+            if (c.bluetooth) {
+                val r = BluetoothLink.exchange(c.btAddress, "GET", "/api/$path", c.key.trim(), out, guarded)
+                checked(r)
+            } else {
+                val conn = URL("${c.base}/$path").openConnection() as HttpURLConnection
+                conn.connectTimeout = 4_000
+                conn.readTimeout = 20_000
+                if (c.key.isNotBlank()) conn.setRequestProperty("X-Api-Key", c.key.trim())
+                try {
+                    if (conn.responseCode !in 200..299) {
+                        val body = conn.errorStream?.use { it.readBytes() } ?: ByteArray(0)
+                        checked(RawResponse(conn.responseCode, emptyMap(), body))
+                    }
+                    val total = conn.contentLengthLong
+                    if (total > 0) {
+                        checkedSpace = true
+                        Storage.requireRoom(dest.parentFile ?: dest, total)
+                    }
+                    conn.inputStream.use { input ->
+                        val buf = ByteArray(64 * 1024)
+                        var done = 0L
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            done += n
+                            guarded(done, total)
+                        }
+                    }
+                } finally {
+                    conn.disconnect()
+                }
+            }
+        }
     }
 
     /** GET an image ("songs/<id>/art?size=..."), null when there is none. */

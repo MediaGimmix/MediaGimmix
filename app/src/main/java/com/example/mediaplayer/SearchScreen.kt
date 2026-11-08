@@ -91,6 +91,7 @@ fun SearchScreen(
                 } else null,
                 modifier = Modifier.weight(1f).focusRequester(focus),
             )
+            StayOnTopToggle()
         }
         if (jellyfinReady) {
             Row(

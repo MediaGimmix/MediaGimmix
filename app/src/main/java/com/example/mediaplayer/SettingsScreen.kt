@@ -253,6 +253,9 @@ fun SettingsScreen(
             SettingsPage.NETWORK -> {
                 item { NetworkSettings(vm) }
             }
+            SettingsPage.STAY_ON_TOP -> {
+                item { StayOnTopSettings() }
+            }
             SettingsPage.ARTIST_ART -> {
                 item { ArtistArtworkSettings(vm) }
             }
@@ -856,6 +859,39 @@ private fun BluetoothControlSettings(vm: LibraryViewModel) {
 }
 
 @Composable
+private fun StayOnTopSettings() {
+    val context = LocalContext.current
+    var allowed by remember { mutableStateOf(WakeLaunch.canOpenFromBackground(context)) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { allowed = WakeLaunch.canOpenFromBackground(context) }
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        SwitchRow(
+            "Stay on top",
+            "While the device is awake and unlocked, the player is always the app in front, like Pure Music mode: " +
+                "leave it (Home, Recents, another app) and it comes straight back. Other apps keep running in the " +
+                "background. Keeps the small Open on wake service running.",
+            StayOnTop.on,
+        ) { StayOnTop.setOn(context, it) }
+        if (StayOnTop.on && !allowed) {
+            Text(
+                "Needs \"Display over other apps\", or Android won't let the app bring itself back.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+            OutlinedButton(onClick = {
+                StayOnTop.allowLeaving()
+                context.startActivity(WakeLaunch.overlaySettingsIntent(context))
+            }) { Text("Allow it") }
+        }
+        SwitchRow(
+            "Show the pin",
+            "The push-pin switch on the navigation bar, the now playing screen and search (never in Settings). " +
+                "Off hides it everywhere; Stay on top can then only be changed here.",
+            StayOnTop.showSwitch,
+        ) { StayOnTop.setShowSwitch(context, it) }
+    }
+}
+
+@Composable
 private fun SwitchRow(title: String, description: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 6.dp)) {
         Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
@@ -955,6 +991,7 @@ enum class SettingsPage(val title: String, val summary: String) {
     ARTIST_ART("Artist artwork", "Downloaded artist pictures"),
     STARTUP("Startup", "Splash screen, open on wake"),
     SECURITY("YubiKey", "Lock the Jellyfin sign-in behind security keys"),
+    STAY_ON_TOP("Stay on top", "Keep the player in front; show or hide its pin"),
 }
 
 /** The top level of Settings. New pages go into one of these (the user names the category). */
@@ -968,7 +1005,10 @@ enum class SettingsCategory(val title: String, val summary: String, val pages: L
         "Library", "Folders, artist names, artwork",
         listOf(SettingsPage.LIBRARY, SettingsPage.ARTISTS, SettingsPage.ARTWORK, SettingsPage.ARTIST_ART),
     ),
-    SYSTEM("System", "Startup, YubiKey", listOf(SettingsPage.STARTUP, SettingsPage.SECURITY)),
+    SYSTEM(
+        "System", "Startup, YubiKey, stay on top",
+        listOf(SettingsPage.STARTUP, SettingsPage.SECURITY, SettingsPage.STAY_ON_TOP),
+    ),
 }
 
 @Composable
@@ -1092,7 +1132,10 @@ private fun WakeLaunchSettings() {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error,
             )
-            OutlinedButton(onClick = { context.startActivity(WakeLaunch.overlaySettingsIntent(context)) }) {
+            OutlinedButton(onClick = {
+                StayOnTop.allowLeaving()
+                context.startActivity(WakeLaunch.overlaySettingsIntent(context))
+            }) {
                 Text("Allow")
             }
         }

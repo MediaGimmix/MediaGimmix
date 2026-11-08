@@ -32,7 +32,7 @@ import kotlinx.coroutines.withContext
  *
  * Runs as a foreground service while the player has a song loaded, so the notification keeps up while
  * Player Remote is in the background (polls the player every [POLL_MS]). Stops itself when the player
- * stops, after a minute without reaching it, or with the notification's ✕ button.
+ * stops or with the notification's ✕ button; while the player can't be reached it shows "Looking for…" and retries every 5 s.
  */
 class RemoteService : Service() {
 
@@ -42,6 +42,7 @@ class RemoteService : Service() {
     private var shownSongId: String? = null
     private var art: Bitmap? = null
     private var last: Status? = null
+    private var lastLocal = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -54,15 +55,19 @@ class RemoteService : Service() {
             },
         )
         session = MediaSession(this, "PlayerRemote").apply {
+            // Buttons go to the phone's own playback while listening here, else to the player.
             setCallback(object : MediaSession.Callback() {
-                override fun onPlay() = send("play")
-                override fun onPause() = send("pause")
-                override fun onSkipToNext() = send("next")
-                override fun onSkipToPrevious() = send("prev")
-                override fun onStop() = send("stop")
+                override fun onPlay() = if (LocalPlayer.active) LocalPlayer.resume() else send("play")
+                override fun onPause() = if (LocalPlayer.active) LocalPlayer.pause() else send("pause")
+                override fun onSkipToNext() = if (LocalPlayer.active) LocalPlayer.next() else send("next")
+                override fun onSkipToPrevious() = if (LocalPlayer.active) LocalPlayer.previous() else send("prev")
+                override fun onStop() = if (LocalPlayer.active) LocalPlayer.stop() else send("stop")
+                override fun onSeekTo(pos: Long) {
+                    if (LocalPlayer.active) LocalPlayer.seek(pos)
+                }
                 // ✕ on Android 13's media card (it shows session actions, not the notification's buttons).
                 override fun onCustomAction(action: String, extras: android.os.Bundle?) {
-                    if (action == ACTION_CLOSE) stopSelf()
+                    if (action == ACTION_CLOSE) close()
                 }
             })
             isActive = true
@@ -72,12 +77,13 @@ class RemoteService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val local = LocalPlayer.active
         when (intent?.action) {
-            ACTION_TOGGLE -> send("toggle")
-            ACTION_NEXT -> send("next")
-            ACTION_PREVIOUS -> send("prev")
+            ACTION_TOGGLE -> if (local) LocalPlayer.toggle() else send("toggle")
+            ACTION_NEXT -> if (local) LocalPlayer.next() else send("next")
+            ACTION_PREVIOUS -> if (local) LocalPlayer.previous() else send("prev")
             ACTION_CLOSE -> {
-                stopSelf()
+                close()
                 return START_NOT_STICKY
             }
         }
@@ -92,25 +98,41 @@ class RemoteService : Service() {
         super.onDestroy()
     }
 
+    /** ✕: ends listening on this phone too (the player stays paused). */
+    private fun close() {
+        LocalPlayer.stop()
+        stopSelf()
+    }
+
     private suspend fun poll() {
-        var failingSince = 0L
+        var lost = false
         while (scope.isActive) {
+            if (LocalPlayer.active) {
+                // Playing on this phone: show that (with a seek bar); the player is paused meanwhile.
+                LocalPlayer.song?.let { song ->
+                    show(Status(song, LocalPlayer.playing, false, LocalPlayer.positionMs, LocalPlayer.durationMs), local = true)
+                }
+                delay(LOCAL_REFRESH_MS)
+                continue
+            }
             val api = Api(Connection.load(this))
             val result = withContext(Dispatchers.IO) { runCatching { api.status() } }
             val s = result.getOrNull()
             if (s != null) {
-                failingSince = 0L
+                lost = false
                 if (s.nowPlaying == null) {
                     stopSelf() // the player stopped
                     return
                 }
                 show(s)
             } else {
-                if (failingSince == 0L) failingSince = System.currentTimeMillis()
-                if (System.currentTimeMillis() - failingSince > GIVE_UP_MS) {
-                    stopSelf()
-                    return
+                // Out of range or switched off: keep looking every 5 s (until ✕ or the player stops).
+                if (!lost) {
+                    lost = true
+                    showLooking()
                 }
+                delay(RETRY_MS)
+                continue
             }
             delay(POLL_MS)
         }
@@ -120,15 +142,21 @@ class RemoteService : Service() {
         scope.launch {
             val api = Api(Connection.load(this@RemoteService))
             withContext(Dispatchers.IO) { runCatching { api.command(command) } }.getOrNull()?.let { s ->
+                if (LocalPlayer.active) return@let
                 if (s.nowPlaying == null) stopSelf() else show(s)
             }
         }
     }
 
-    private fun show(s: Status) {
+    /**
+     * [local]: playing on this phone, so the session gets the song's length, position and seeking: Android
+     * then draws a seek bar. Otherwise (the player is playing) no length and no seeking: no seek bar.
+     */
+    private fun show(s: Status, local: Boolean = false) {
         val song = s.nowPlaying ?: return
         last = s
-        Scrobbler.onStatus(this, s)
+        lastLocal = local
+        if (!local) Scrobbler.onStatus(this, s) // local playback feeds the scrobbler itself
         if (song.id != shownSongId) {
             shownSongId = song.id
             art = null
@@ -137,13 +165,13 @@ class RemoteService : Service() {
                 val image = withContext(Dispatchers.IO) { runCatching { api.songArtBitmap(song.id, 512) }.getOrNull() }
                 if (shownSongId == song.id && image != null) {
                     art = image
-                    last?.let { show(it) }
+                    last?.let { show(it, lastLocal) }
                 }
             }
         }
-        // No METADATA_KEY_DURATION and no ACTION_SEEK_TO: no seek bar.
         session.setMetadata(
             MediaMetadata.Builder()
+                .apply { if (local && s.durationMs > 0) putLong(MediaMetadata.METADATA_KEY_DURATION, s.durationMs) }
                 .putString(MediaMetadata.METADATA_KEY_TITLE, song.title)
                 .putString(MediaMetadata.METADATA_KEY_ARTIST, song.artist.orEmpty())
                 .putString(MediaMetadata.METADATA_KEY_ALBUM, song.album.orEmpty())
@@ -154,19 +182,34 @@ class RemoteService : Service() {
             PlaybackState.Builder()
                 .setActions(
                     PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_PLAY_PAUSE or
-                        PlaybackState.ACTION_SKIP_TO_NEXT or PlaybackState.ACTION_SKIP_TO_PREVIOUS or PlaybackState.ACTION_STOP,
+                        PlaybackState.ACTION_SKIP_TO_NEXT or PlaybackState.ACTION_SKIP_TO_PREVIOUS or PlaybackState.ACTION_STOP or
+                        (if (local) PlaybackState.ACTION_SEEK_TO else 0L),
                 )
                 .addCustomAction(
                     PlaybackState.CustomAction.Builder(ACTION_CLOSE, "Close", android.R.drawable.ic_menu_close_clear_cancel).build(),
                 )
                 .setState(
                     if (s.isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
-                    PlaybackState.PLAYBACK_POSITION_UNKNOWN,
+                    if (local) s.positionMs else PlaybackState.PLAYBACK_POSITION_UNKNOWN,
                     if (s.isPlaying) 1f else 0f,
                 )
                 .build(),
         )
         getSystemService(NotificationManager::class.java).notify(ID, build(s))
+    }
+
+    /** The notification while the player can't be reached. */
+    private fun showLooking() {
+        val name = Connection.load(this).let { if (it.bluetooth) it.btName.ifEmpty { "the player" } else "the player" }
+        val n = Notification.Builder(this, CHANNEL)
+            .setSmallIcon(icon("notification", android.R.drawable.ic_media_play))
+            .setContentTitle("Looking for $name…")
+            .setContentText("Trying again every 5 s")
+            .setOngoing(true)
+            .setShowWhen(false)
+            .addAction(action("button_close", android.R.drawable.ic_menu_close_clear_cancel, "Close", ACTION_CLOSE))
+            .build()
+        getSystemService(NotificationManager::class.java).notify(ID, n)
     }
 
     private fun build(s: Status?): Notification {
@@ -222,7 +265,8 @@ class RemoteService : Service() {
         private const val CHANNEL = "remote_playback"
         private const val ID = 2001
         private const val POLL_MS = 3_000L
-        private const val GIVE_UP_MS = 60_000L
+        private const val RETRY_MS = 5_000L
+        private const val LOCAL_REFRESH_MS = 1_000L
         private const val ACTION_TOGGLE = "toggle"
         private const val ACTION_NEXT = "next"
         private const val ACTION_PREVIOUS = "prev"

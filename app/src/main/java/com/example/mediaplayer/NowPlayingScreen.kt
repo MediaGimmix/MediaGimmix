@@ -48,6 +48,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.background
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -121,6 +124,7 @@ fun NowPlayingScreen(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            StayOnTopToggle()
             Box {
                 IconButton(onClick = { menuOpen = true }) {
                     Text("⋯", fontSize = 24.sp, fontWeight = FontWeight.Bold)
@@ -200,14 +204,45 @@ fun NowPlayingScreen(
                 )
             } else {
                 val side = minOf(maxWidth, maxHeight)
-                CoverImage(
-                    source = song?.let { vm.songArt(it) },
-                    title = song?.displayTitle ?: "",
-                    sizePx = 1000,
-                    modifier = Modifier.size(side),
-                    corner = 12.dp,
-                    placeholderStyle = MaterialTheme.typography.displayLarge,
-                )
+                // Swipe the cover for the next/previous song (the buttons below stay).
+                TrackSwiper(
+                    current = song,
+                    previous = playback.queue.peekPrevious(),
+                    next = playback.queue.peekNext(),
+                    onPrevious = { playback.previousTrack() },
+                    onNext = { playback.skipNext() },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { shown, label ->
+                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        CoverImage(
+                            source = shown?.let { vm.songArt(it) },
+                            title = shown?.displayTitle ?: "",
+                            sizePx = 1000,
+                            modifier = Modifier.size(side),
+                            corner = 12.dp,
+                            placeholderStyle = MaterialTheme.typography.displayLarge,
+                        )
+                        // The incoming song: its name (and queue change) over the bottom of its cover.
+                        if (shown != null && shown.uri != song?.uri) {
+                            Column(
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .width(side)
+                                    .background(Color.Black.copy(alpha = 0.6f))
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                            ) {
+                                Text(shown.displayTitle, style = MaterialTheme.typography.titleMedium, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    label ?: shown.displaySubtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (label != null) MaterialTheme.colorScheme.secondary else Color.White.copy(alpha = 0.8f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
 

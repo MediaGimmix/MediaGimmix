@@ -41,8 +41,8 @@ import kotlinx.coroutines.delay
  */
 private enum class Section(val label: String, val file: String, val icon: ImageVector) {
     PLAYER("Player", "tab_player", Icons.Filled.PlayArrow),
-    QUEUE("Queue", "tab_queue", Icons.AutoMirrored.Filled.List),
     PLAYLISTS("Playlists", "tab_playlists", Icons.Filled.Menu),
+    QUEUE("Queue", "tab_queue", Icons.AutoMirrored.Filled.List),
     SEARCH("Search", "tab_search", Icons.Filled.Search),
     SETTINGS("Settings", "tab_settings", Icons.Filled.Settings),
 }
@@ -77,9 +77,10 @@ private fun RemoteApp(vm: RemoteViewModel = viewModel()) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            // One request at a time; slower while the player can't be reached (e.g. out of Bluetooth range).
             while (true) {
-                vm.refresh()
-                delay(POLL_MS)
+                val ok = vm.refreshNow()
+                delay(if (ok) POLL_MS else RETRY_MS)
             }
         }
     }
@@ -110,3 +111,4 @@ private fun RemoteApp(vm: RemoteViewModel = viewModel()) {
 }
 
 private const val POLL_MS = 2_000L
+private const val RETRY_MS = 5_000L

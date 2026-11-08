@@ -99,31 +99,52 @@ fun SettingsScreen(vm: RemoteViewModel) {
         } else {
             Text(
                 "Pair this phone with the player in Android's Bluetooth settings, then on the player: Settings → Network → " +
-                    "Bluetooth control (off every time the player starts). Pick the player below.",
+                    "Bluetooth control (switch it on, or turn on its \"Start with the app\"). Pick the player below.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            val paired = remember(btAllowed) { BluetoothDevices.paired(context) }
-            if (paired.isEmpty()) {
-                Text(
-                    "No paired devices found. Pair the player first (and check Bluetooth is on).",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                )
+            // Collapsed: just the chosen player (name + MAC) and a button; expanded: every paired device.
+            var choosing by rememberSaveable { mutableStateOf(btAddress.isEmpty()) }
+            val paired = remember(btAllowed, choosing) { if (choosing) BluetoothDevices.paired(context) else emptyList() }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    if (btAddress.isNotEmpty()) {
+                        Text(btName.ifEmpty { btAddress }, style = MaterialTheme.typography.bodyLarge)
+                        Text(btAddress, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        Text("No player chosen", style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+                OutlinedButton(onClick = { choosing = !choosing }) {
+                    Text(if (choosing) "Close" else if (btAddress.isEmpty()) "Choose" else "Change")
+                }
             }
-            paired.forEach { d ->
-                Row(
-                    modifier = Modifier.fillMaxWidth().selectable(
-                        selected = d.address == btAddress,
-                        onClick = { btAddress = d.address; btName = d.name },
-                        role = Role.RadioButton,
-                    ),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    RadioButton(selected = d.address == btAddress, onClick = null)
-                    Column(modifier = Modifier.padding(start = 8.dp)) {
-                        Text(d.name, style = MaterialTheme.typography.bodyLarge)
-                        Text(d.address, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (choosing) {
+                if (paired.isEmpty()) {
+                    Text(
+                        "No paired devices found. Pair the player first (and check Bluetooth is on).",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                paired.forEach { d ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().selectable(
+                            selected = d.address == btAddress,
+                            onClick = {
+                                btAddress = d.address
+                                btName = d.name
+                                choosing = false
+                            },
+                            role = Role.RadioButton,
+                        ),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = d.address == btAddress, onClick = null)
+                        Column(modifier = Modifier.padding(start = 8.dp)) {
+                            Text(d.name, style = MaterialTheme.typography.bodyLarge)
+                            Text(d.address, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
             }

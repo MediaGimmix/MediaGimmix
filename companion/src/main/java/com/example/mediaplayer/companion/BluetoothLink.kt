@@ -21,20 +21,40 @@ object BluetoothLink {
     private val SERVICE_UUID: UUID = UUID.fromString("b0d63ac8-81d4-4769-90ba-e4f52e0da7a8")
     private const val TIMEOUT_MS = 15_000L
 
-    private var socket: BluetoothSocket? = null
+    @Volatile private var socket: BluetoothSocket? = null
     private var input: InputStream? = null
     private var address: String? = null
     private val watchdog = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "bt-watchdog").apply { isDaemon = true } }
 
-    /** Sends one request ([path] starts with "/api/") and reads the reply. Blocking. */
+    /**
+     * Sends one request ([path] starts with "/api/") and reads the reply. Blocking. With [sink], a successful
+     * reply's body is written there (downloads; [progress] gets bytes so far and the total, -1 if unknown)
+     * and the returned body is empty.
+     */
     @Synchronized
-    fun exchange(deviceAddress: String, method: String, path: String, key: String): RawResponse {
+    fun exchange(
+        deviceAddress: String,
+        method: String,
+        path: String,
+        key: String,
+        sink: java.io.OutputStream? = null,
+        progress: ((Long, Long) -> Unit)? = null,
+    ): RawResponse {
         return try {
-            once(deviceAddress, method, path, key)
+            once(deviceAddress, method, path, key, sink, progress)
         } catch (e: IOException) {
             close()
-            once(deviceAddress, method, path, key) // the link may have dropped since the last request
+            if (sink != null) throw e // a half-written download can't simply be repeated here
+            once(deviceAddress, method, path, key, null, null) // the link may have dropped since the last request
         }
+    }
+
+    /**
+     * Cuts the link right now, even mid-request (not synchronized): a long download in the background
+     * fails at once instead of making the next request wait for it. The next request reconnects.
+     */
+    fun abort() {
+        runCatching { socket?.close() }
     }
 
     @Synchronized
@@ -45,10 +65,22 @@ object BluetoothLink {
         address = null
     }
 
-    private fun once(deviceAddress: String, method: String, path: String, key: String): RawResponse {
+    private fun once(
+        deviceAddress: String,
+        method: String,
+        path: String,
+        key: String,
+        sink: java.io.OutputStream?,
+        progress: ((Long, Long) -> Unit)?,
+    ): RawResponse {
         val s = connect(deviceAddress)
-        // Bluetooth sockets have no read timeout: close the link if the player stops answering.
-        val timer = watchdog.schedule({ runCatching { s.close() } }, TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        // Bluetooth sockets have no read timeout: close the link if the player stops answering for a while
+        // (restarted whenever data arrives, so long downloads are fine).
+        var timer = watchdog.schedule({ runCatching { s.close() } }, TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        val kick = {
+            timer.cancel(false)
+            timer = watchdog.schedule({ runCatching { s.close() } }, TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        }
         try {
             val head = buildString {
                 append(method).append(' ').append(path).append(" HTTP/1.1\r\n")
@@ -59,7 +91,7 @@ object BluetoothLink {
             }
             s.outputStream.write(head.toByteArray(Charsets.ISO_8859_1))
             s.outputStream.flush()
-            return read(input!!)
+            return read(input!!, sink, progress, kick)
         } finally {
             timer.cancel(false)
         }
@@ -86,7 +118,12 @@ object BluetoothLink {
         return s
     }
 
-    private fun read(input: InputStream): RawResponse {
+    private fun read(
+        input: InputStream,
+        sink: java.io.OutputStream?,
+        progress: ((Long, Long) -> Unit)?,
+        kick: () -> Unit,
+    ): RawResponse {
         val status = readLine(input) ?: throw IOException("The player closed the link")
         val code = status.split(' ').getOrNull(1)?.toIntOrNull() ?: throw IOException("Bad reply: $status")
         val headers = HashMap<String, String>()
@@ -97,6 +134,25 @@ object BluetoothLink {
             if (i > 0) headers[line.substring(0, i).trim().lowercase()] = line.substring(i + 1).trim()
         }
         val length = headers["content-length"]?.toLongOrNull()
+        if (sink != null && code in 200..299) {
+            // Stream the body to [sink].
+            val buf = ByteArray(32 * 1024)
+            var done = 0L
+            while (length == null || done < length) {
+                val want = if (length == null) buf.size else minOf(buf.size.toLong(), length - done).toInt()
+                val n = input.read(buf, 0, want)
+                if (n < 0) {
+                    if (length == null) break
+                    throw IOException("The player closed the link")
+                }
+                sink.write(buf, 0, n)
+                done += n
+                kick()
+                progress?.invoke(done, length ?: -1)
+            }
+            if (length == null || headers["connection"].equals("close", ignoreCase = true)) close()
+            return RawResponse(code, headers, ByteArray(0))
+        }
         val body = if (length != null) {
             val out = ByteArray(length.toInt())
             var read = 0

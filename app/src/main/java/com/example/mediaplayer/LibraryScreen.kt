@@ -27,6 +27,9 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
+import androidx.compose.material3.Surface
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
@@ -111,7 +114,10 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
             vm.addFolder(uri)
         }
     }
-    val addFolder: () -> Unit = { folderPicker.launch(null) }
+    val addFolder: () -> Unit = {
+        StayOnTop.allowLeaving() // the folder picker is another app
+        folderPicker.launch(null)
+    }
 
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val key = pendingArtKey
@@ -125,6 +131,7 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
     }
     val pickImage: (String) -> Unit = { key ->
         pendingArtKey = key
+        StayOnTop.allowLeaving()
         imagePicker.launch(arrayOf("image/*"))
     }
 
@@ -134,6 +141,10 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
             openKey = null
         }
     }
+
+    // Stay on top: Back on the main screen does nothing (closing would stop the music and it would reopen anyway).
+    // Registered first, so the handler below wins whenever there is somewhere to go back to.
+    BackHandler(enabled = StayOnTop.on) {}
 
     BackHandler(enabled = showNowPlaying || showSettings || showSearch || tab == 1 || section != null) {
         when {
@@ -184,7 +195,10 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
                     vm = vm,
                     onAddFolder = addFolder,
                     // Picking the same folder again grants write access; the folder list doesn't change.
-                    onRegrantFolder = { uri -> folderPicker.launch(Uri.parse(uri)) },
+                    onRegrantFolder = { uri ->
+                        StayOnTop.allowLeaving()
+                        folderPicker.launch(Uri.parse(uri))
+                    },
                     onBack = { showSettings = false },
                 )
             }
@@ -215,19 +229,6 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
             }
 
             else -> {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TabRow(selectedTabIndex = tab, modifier = Modifier.weight(1f)) {
-                        Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Library") })
-                        Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Queue") })
-                    }
-                    IconButton(onClick = { showSearch = true }) {
-                        TransportIcon(Icons.Filled.Search, "button_search", contentDescription = "Search")
-                    }
-                    IconButton(onClick = { showSettings = true }) {
-                        Icon(Icons.Filled.Settings, contentDescription = "Settings")
-                    }
-                }
-
                 Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     if (tab == 1) {
                         QueueTab(playback, art = { vm.songArt(it) })
@@ -249,10 +250,50 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
         if (!showNowPlaying) {
             NowPlayingBar(
                 playback = playback,
-                art = playback.nowPlaying?.let { vm.songArt(it) },
+                artFor = { vm.songArt(it) },
                 onOpen = { showNowPlaying = true },
             )
         }
+        // Library / Queue view: the navigation bar at the very bottom.
+        if (!showNowPlaying && !showSettings && !showSearch) {
+            NavBar(
+                tab = tab,
+                onLibrary = { tab = 0 },
+                onQueue = { tab = 1 },
+                onSearch = { showSearch = true },
+                onSettings = { showSettings = true },
+            )
+        }
+    }
+}
+
+/**
+ * Bottom navigation: Library, Queue, Search, Settings spaced evenly (icons from assets/icons/nav_*.png,
+ * else Material icons), with the Stay on top pin at the end.
+ */
+@Composable
+private fun NavBar(tab: Int, onLibrary: () -> Unit, onQueue: () -> Unit, onSearch: () -> Unit, onSettings: () -> Unit) {
+    Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
+        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly) {
+                NavIcon(Icons.Filled.Home, "nav_library", "Library", selected = tab == 0, onClick = onLibrary)
+                NavIcon(Icons.AutoMirrored.Filled.List, "nav_queue", "Queue", selected = tab == 1, onClick = onQueue)
+                NavIcon(Icons.Filled.Search, "nav_search", "Search", selected = false, onClick = onSearch)
+                NavIcon(Icons.Filled.Settings, "nav_settings", "Settings", selected = false, onClick = onSettings)
+            }
+            StayOnTopToggle()
+        }
+    }
+}
+
+@Composable
+private fun NavIcon(vector: androidx.compose.ui.graphics.vector.ImageVector, file: String, label: String, selected: Boolean, onClick: () -> Unit) {
+    IconButton(onClick = onClick, modifier = Modifier.size(52.dp)) {
+        TransportIcon(
+            vector, file, contentDescription = label, size = 38.dp,
+            imageAlpha = if (selected) 1f else 0.5f,
+            tint = if (selected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

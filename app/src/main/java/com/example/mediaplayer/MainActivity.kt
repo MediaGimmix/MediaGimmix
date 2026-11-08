@@ -27,6 +27,16 @@ class MainActivity : ComponentActivity() {
     /** Same instance LibraryScreen gets from viewModel(). */
     private val vm: LibraryViewModel by viewModels()
 
+    override fun onStart() {
+        super.onStart()
+        StayOnTop.onShown()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        StayOnTop.onHidden(this) // comes back right away when "Stay on top" is on
+    }
+
     /** Remapped buttons while the app is on screen (volume keys only reach us here). */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean =
         vm.playback.handleKey(event) || super.dispatchKeyEvent(event)
@@ -40,6 +50,7 @@ class MainActivity : ComponentActivity() {
         // Draw behind the system bars; status bar icons follow light/dark mode.
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        StayOnTop.init(this)
         WakeLaunch.startIfEnabled(this) // in case Android stopped it
         // Android 13+: the media notification needs permission (asked once; "Don't allow" is respected).
         if (android.os.Build.VERSION.SDK_INT >= 33 &&

@@ -47,10 +47,20 @@ Transport buttons (optional; without a file the built-in Material icon is used)
   button_shuffle.png       Shuffle (shown dimmed when shuffle is off)
   button_search.png        Search (top bar, left of Settings)
 
+Navigation bar (bottom of the Library/Queue view):
+  nav_library.png, nav_queue.png, nav_search.png, nav_settings.png
+  nav_stay_on_top.png      Stay on top pin; recoloured white (on) / black (off), so any one-colour pin works
+
+App icon (both apps): app_icon.png (white outline of the logo on transparent), else splash.png.
+  Copied into the launcher icon at build time: replace the file and rebuild. Keep it square.
+
 Notification (optional): notification.png is the small icon of the media notification
 (white on transparent works best; Android tints it). Without it Android's play icon is used.
 The notification's buttons use the button_*.png files above when present.
   These are shown in their own colours, not tinted.
 
-The placeholders are Noto Color Emoji (Apache 2.0 / OFL).
+Style (2026-11-08): black Material Symbols (Google, Apache 2.0; filled) on an accent-green (#1A6E5C) circle,
+96x96, composited with Pillow. Kept as they were: menu_albums, menu_jellyfin, menu_playlists / header_queue
+(hamburger), player buttons. Previous versions are in icon-backups/ in the project root.
+Older placeholders are Noto Color Emoji (Apache 2.0 / OFL).
 add-menu-icons.sh only creates files that are missing, so your replacements are kept.

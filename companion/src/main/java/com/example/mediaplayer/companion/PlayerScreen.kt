@@ -17,9 +17,13 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -28,11 +32,16 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-/** Now playing on the player, with its buttons. No seek bar, on purpose. */
+/**
+ * Now playing on the player, with its buttons. No seek bar while the player plays (on purpose); while
+ * listening on this phone ([LocalPlayer]) there is one, and the buttons control the phone's playback.
+ */
 @Composable
 fun PlayerScreen(vm: RemoteViewModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val local = LocalPlayer.active
     val s = vm.status
-    val song = s?.nowPlaying
+    val song = if (local) LocalPlayer.song else s?.nowPlaying
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -74,12 +83,26 @@ fun PlayerScreen(vm: RemoteViewModel) {
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
-        vm.error?.let {
+        if (!local) {
+            vm.error?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+            }
+        }
+        LocalPlayer.error?.let {
             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
         }
-        Spacer(Modifier.height(24.dp))
+        LocalPlayer.busy?.let {
+            Text(it, color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+        }
 
-        val enabled = s != null
+        if (local) {
+            SeekBar()
+        } else {
+            Spacer(Modifier.height(24.dp))
+        }
+
+        val enabled = local || s != null
+        val playing = if (local) LocalPlayer.playing else s?.isPlaying == true
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             IconButton(onClick = { vm.command("shuffle") }, enabled = enabled) {
                 TransportIcon(
@@ -88,22 +111,67 @@ fun PlayerScreen(vm: RemoteViewModel) {
                     imageAlpha = if (s?.shuffle == true) 1f else 0.4f,
                 )
             }
-            IconButton(onClick = { vm.command("prev") }, enabled = enabled) {
+            IconButton(onClick = { if (local) LocalPlayer.previous() else vm.command("prev") }, enabled = enabled) {
                 TransportIcon(MediaIcons.SkipPrevious, "button_previous", "Previous", size = 36.dp)
             }
-            FilledIconButton(onClick = { vm.command("toggle") }, enabled = enabled, modifier = Modifier.size(72.dp)) {
-                if (s?.isPlaying == true) {
+            FilledIconButton(
+                onClick = { if (local) LocalPlayer.toggle() else vm.command("toggle") },
+                enabled = enabled,
+                modifier = Modifier.size(72.dp),
+            ) {
+                if (playing) {
                     TransportIcon(MediaIcons.Pause, "button_pause", "Pause", size = 40.dp)
                 } else {
                     TransportIcon(MediaIcons.Play, "button_play", "Play", size = 40.dp)
                 }
             }
-            IconButton(onClick = { vm.command("next") }, enabled = enabled) {
+            IconButton(onClick = { if (local) LocalPlayer.next() else vm.command("next") }, enabled = enabled) {
                 TransportIcon(MediaIcons.SkipNext, "button_next", "Next", size = 36.dp)
             }
-            IconButton(onClick = { vm.command("stop") }, enabled = enabled) {
+            IconButton(onClick = { if (local) LocalPlayer.stop() else vm.command("stop") }, enabled = enabled) {
                 TransportIcon(MediaIcons.Stop, "button_stop", "Stop")
             }
         }
+
+        Spacer(Modifier.height(16.dp))
+        if (local) {
+            Text("Playing on this phone · the player is paused", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+            OutlinedButton(onClick = { LocalPlayer.handBack() }, modifier = Modifier.padding(top = 8.dp)) {
+                Text("Back to the player")
+            }
+        } else {
+            OutlinedButton(
+                onClick = { LocalPlayer.start(context) },
+                enabled = s?.nowPlaying != null && LocalPlayer.busy == null,
+            ) { Text("Listen on this phone") }
+        }
     }
+}
+
+/** Position and length of the song playing on this phone, draggable. */
+@Composable
+private fun SeekBar() {
+    val duration = LocalPlayer.durationMs.coerceAtLeast(1L)
+    var dragging by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<Float?>(null) }
+    val shown = dragging ?: (LocalPlayer.positionMs.toFloat() / duration).coerceIn(0f, 1f)
+    Column(modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth().padding(top = 12.dp, bottom = 4.dp)) {
+        Slider(
+            value = shown,
+            onValueChange = { dragging = it },
+            onValueChangeFinished = {
+                dragging?.let { LocalPlayer.seek((it * duration).toLong()) }
+                dragging = null
+            },
+        )
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Text(time((shown * duration).toLong()), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.weight(1f))
+            Text(time(LocalPlayer.durationMs), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+private fun time(ms: Long): String {
+    val total = ms / 1000
+    return "%d:%02d".format(total / 60, total % 60)
 }

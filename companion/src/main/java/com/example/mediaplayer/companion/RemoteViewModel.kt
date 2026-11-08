@@ -16,6 +16,10 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
 
     var connection by mutableStateOf(Connection.load(app))
         private set
+
+    init {
+        LocalPlayer.cleanStale(app)
+    }
     var status by mutableStateOf<Status?>(null)
         private set
     /** Last connection problem, null while things work. */
@@ -79,15 +83,29 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
     }
 
-    /** Fetch the status once (the activity calls this every couple of seconds while resumed). */
+    /** Fetch the status once (fire and forget). */
     fun refresh() {
+        viewModelScope.launch { refreshNow() }
+    }
+
+    /**
+     * Fetch the status once and wait for it; true when the player answered. The activity calls this in a
+     * loop while it's on screen: every 2 s when connected, every 5 s while looking for the player.
+     */
+    suspend fun refreshNow(): Boolean {
         if (!connection.isSet) {
             error = "Set the player's address in Settings."
-            return
+            return false
         }
+        val result = withContext(Dispatchers.IO) { runCatching { api().status() } }
+        result.onSuccess { apply(it) }.onFailure { error = message(it) + " Trying again every 5 s." }
+        return result.isSuccess
+    }
+
+    /** POST a queue jump ("queue/general/3/play?id=...") on the player. */
+    fun playQueued(path: String) {
         viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) { runCatching { api().status() } }
-            result.onSuccess { apply(it) }.onFailure { error = message(it) }
+            call { play(path, jellyfin = false) }.onSuccess { apply(it) }.onFailure { error = message(it) }
         }
     }
 
@@ -102,7 +120,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
     private fun apply(s: Status) {
         status = s
         error = null
-        Scrobbler.onStatus(getApplication(), s)
+        if (!LocalPlayer.active) Scrobbler.onStatus(getApplication(), s) // local playback scrobbles itself
         // Only ever started from here, i.e. while the app is in use (Android limits background starts).
         if (notificationOn && s.nowPlaying != null) RemoteService.start(getApplication())
         val id = s.nowPlaying?.id

@@ -59,6 +59,42 @@ class PlayQueue {
         return null
     }
 
+    /** A song a swipe would move to, and whether that changes queues ([label], null when it stays in one). */
+    class Peek(val song: Song, val label: String?)
+
+    /** What Next would play: the play next queue first, then the general queue after the spot. */
+    fun peekNext(): Peek? {
+        next.firstOrNull()?.let { return Peek(it, if (currentFromGeneral) "Moving to Play next" else null) }
+        val g = general.getOrNull(returnIndex + 1) ?: return null
+        return Peek(g, if (!currentFromGeneral && general.isNotEmpty()) "Moving to the queue" else null)
+    }
+
+    /** What a step back would play (see [stepBack]), without changing anything. */
+    fun peekPrevious(): Peek? {
+        history.lastOrNull()?.let { return Peek(it, null) }
+        if (currentFromGeneral && returnIndex >= 1) return Peek(general[returnIndex - 1], null)
+        return null
+    }
+
+    /**
+     * Tap on general queue row [i]: the return spot moves there and that song plays now. The play next
+     * queue is untouched, so it plays after the tapped song.
+     */
+    fun jumpGeneral(i: Int): Song? {
+        val song = general.getOrNull(i) ?: return null
+        returnIndex = i
+        currentFromGeneral = true
+        return song
+    }
+
+    /** Tap on play next row [i]: that song plays now and the ones above it are dropped (skipped). */
+    fun jumpNext(i: Int): Song? {
+        val song = next.getOrNull(i) ?: return null
+        next = next.drop(i + 1)
+        currentFromGeneral = false
+        return song
+    }
+
     fun pushHistory(song: Song) {
         history.addLast(song)
         while (history.size > MAX_HISTORY) history.removeFirst()

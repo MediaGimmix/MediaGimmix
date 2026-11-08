@@ -1,5 +1,6 @@
 package com.example.mediaplayer.companion
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -43,7 +44,16 @@ fun QueueScreen(vm: RemoteViewModel) {
     var queue by remember { mutableStateOf<QueueInfo?>(null) }
     var problem by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(vm.connection) {
+    var reload by remember { mutableIntStateOf(0) }
+    // Tap a song: it plays now (on the player, or here while listening on this phone).
+    val playQueued: (kind: String, index: Int, song: SongInfo) -> Unit = { kind, index, song ->
+        val path = "queue/$kind/$index/play?id=${song.id}"
+        if (LocalPlayer.active) LocalPlayer.playQueued(path, song) else vm.playQueued(path)
+        reload++
+    }
+
+    LaunchedEffect(vm.connection, reload) {
+        if (reload > 0) delay(800) // let the player move first
         while (true) {
             vm.call { queue() }
                 .onSuccess { queue = it; problem = null }
@@ -88,7 +98,7 @@ fun QueueScreen(vm: RemoteViewModel) {
                         )
                     }
                 }
-                songs(vm, q.general)
+                songs(vm, q.general) { i, song -> playQueued("general", q.generalStart + i, song) }
             }
             else -> LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 if (q.playNext.isEmpty()) {
@@ -97,7 +107,7 @@ fun QueueScreen(vm: RemoteViewModel) {
                     if (q.playNext.size < q.playNextTotal) {
                         item { Note("Showing the first ${q.playNext.size} of ${"%,d".format(q.playNextTotal)}.") }
                     }
-                    songs(vm, q.playNext)
+                    songs(vm, q.playNext) { i, song -> playQueued("next", i, song) }
                 }
             }
         }
@@ -115,18 +125,26 @@ private fun LazyListScope.header(text: String) {
     }
 }
 
-/** Read-only rows (the API can't jump within the queue). */
-private fun LazyListScope.songs(vm: RemoteViewModel, list: List<SongInfo>, dim: Boolean = false, current: Boolean = false) {
-    itemsIndexed(list) { _, s ->
-        QueueRow(vm, s, dim, current)
+/** Queue rows; [onTap] (coming up / play next) plays that song now. Played rows are read-only. */
+private fun LazyListScope.songs(
+    vm: RemoteViewModel,
+    list: List<SongInfo>,
+    dim: Boolean = false,
+    current: Boolean = false,
+    onTap: ((Int, SongInfo) -> Unit)? = null,
+) {
+    itemsIndexed(list) { i, s ->
+        QueueRow(vm, s, dim, current, onTap?.let { tap -> { tap(i, s) } })
     }
 }
 
 @Composable
-private fun QueueRow(vm: RemoteViewModel, s: SongInfo, dim: Boolean, current: Boolean) {
+private fun QueueRow(vm: RemoteViewModel, s: SongInfo, dim: Boolean, current: Boolean, onClick: (() -> Unit)?) {
     val alpha = if (dim) 0.55f else 1f
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+        modifier = Modifier.fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 16.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(modifier = Modifier.alpha(alpha)) { RemoteCover(vm, "songs/${s.id}/art?size=120", s.title) }

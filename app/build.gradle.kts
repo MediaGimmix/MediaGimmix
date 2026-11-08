@@ -61,6 +61,22 @@ android {
     }
 }
 
+// App icon = app/src/main/assets/icons/app_icon.png (white outline of the logo), else the startup splash image
+// (splash.png); copied in at every build, so replacing the file changes the icon. Transparent background.
+val launcherArtRes = layout.buildDirectory.dir("generated/launcherIcon/res")
+val copyLauncherArt by tasks.registering(Copy::class) {
+    val icons = rootProject.file("app/src/main/assets/icons")
+    val art = File(icons, "app_icon.png").takeIf { it.exists() } ?: File(icons, "splash.png")
+    doFirst {
+        if (!art.exists()) throw GradleException("$icons has neither app_icon.png nor splash.png: one of them is the app icon.")
+    }
+    from(art)
+    into(launcherArtRes.map { it.dir("drawable-nodpi") })
+    rename { "launcher_art.png" }
+}
+android.sourceSets.getByName("main").res.srcDir(launcherArtRes)
+tasks.named("preBuild") { dependsOn(copyLauncherArt) }
+
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)

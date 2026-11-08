@@ -399,6 +399,22 @@ class Playback(
 
     fun playLast(song: Song) = queue.addNextLast(song)
 
+    /** Plays general queue row [index] now; the spot moves there (see [PlayQueue.jumpGeneral]). */
+    fun playFromGeneral(index: Int) {
+        val current = nowPlaying
+        val song = queue.jumpGeneral(index) ?: return
+        if (current != null) queue.pushHistory(current)
+        start(song)
+    }
+
+    /** Plays play next row [index] now, skipping the ones above it (see [PlayQueue.jumpNext]). */
+    fun playFromNext(index: Int) {
+        val current = nowPlaying
+        val song = queue.jumpNext(index) ?: return
+        if (current != null) queue.pushHistory(current)
+        start(song)
+    }
+
     fun playNextFromGeneral(index: Int) {
         val song = queue.general.getOrNull(index) ?: return
         queue.addNextFirst(song)
@@ -444,6 +460,17 @@ class Playback(
         }
         if (player.currentPosition > RESTART_THRESHOLD_MS) {
             player.seekTo(0)
+            return
+        }
+        val prev = queue.stepBack(current)
+        if (prev != null) start(prev) else player.seekTo(0)
+    }
+
+    /** Always the song before (no restart rule), for the companion's own playback. */
+    fun previousTrack() {
+        val current = nowPlaying ?: return
+        if (idle) {
+            start(current)
             return
         }
         val prev = queue.stepBack(current)
@@ -540,8 +567,16 @@ class Playback(
             if (current != null) queue.pushHistory(current)
             start(song)
         } else {
+            // The queue ran out: unload the last song so the bottom bar and the now playing screen go away
+            // (like Stop, but the queues and history stay as they are).
+            if (current != null) queue.pushHistory(current)
             idle = true
             player.stop()
+            player.clearMediaItems()
+            nowPlaying = null
+            counted = false
+            outputInfo = outputInfo.copy(input = "", decoder = "")
+            refreshNotification()
         }
     }
 

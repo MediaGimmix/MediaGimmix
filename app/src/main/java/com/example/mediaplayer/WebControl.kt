@@ -57,8 +57,15 @@ import org.json.JSONObject
  *   POST /api/songs/{id}/play[?playlist=|artist=|album={id}]   play a song like tapping it in that list
  *                                           (default: its album)
  *   POST /api/player/play | pause | toggle | next | prev | stop
+ *        next|prev ?keepPaused=true: move through the queue but stay paused; prev ?force=true: always the
+ *        previous song (no restart-if-3-s-in)
+ *   POST /api/player/seek?ms=12345         jump within the current song
  *   POST /api/player/shuffle[?on=true|false]   toggle (or set) shuffle
  *   GET  /api/status                        now playing, playing/paused, shuffle, position
+ *   POST /api/queue/general/{index}/play?id=   play that general queue song now (the spot moves there; play next
+ *                                           still follows). index = position in the whole queue (generalStart + i)
+ *   POST /api/queue/next/{index}/play?id=   play that play next song now (the ones above it are skipped)
+ *                                           (?id = the song id seen; 409 if the queue changed)
  *   GET  /api/queue                         status + last 48 played ("history", oldest first) + up to 99 coming
  *                                           up: "playNext" then "general"; historyTotal/playNextTotal/generalTotal
  */
@@ -283,13 +290,23 @@ class WebControl(private val context: Context, private val vm: LibraryViewModel)
             s.size == 2 && s[0] == "player" -> {
                 if (!post) return error(405, "Use POST")
                 val p = vm.playback
+                // ?keepPaused=true: move through the queue without sound (the companion is playing it instead).
+                val keepPaused = req.query["keepPaused"]?.toBooleanStrictOrNull() ?: false
                 val known = onMain {
                     when (s[1]) {
                         "play" -> p.resume()
                         "pause" -> p.pause()
                         "toggle" -> p.togglePause()
-                        "next" -> p.skipNext()
-                        "prev", "previous" -> p.skipPrevious()
+                        "next" -> {
+                            p.skipNext()
+                            if (keepPaused) p.pause()
+                        }
+                        "prev", "previous" -> {
+                            // ?force=true: always the previous song (no "restart if > 3 s in").
+                            if (req.query["force"]?.toBooleanStrictOrNull() == true) p.previousTrack() else p.skipPrevious()
+                            if (keepPaused) p.pause()
+                        }
+                        "seek" -> p.seekTo(req.query["ms"]?.toLongOrNull()?.coerceAtLeast(0L) ?: return@onMain false)
                         "stop" -> p.stop()
                         "shuffle" -> p.changeShuffle(req.query["on"]?.toBooleanStrictOrNull() ?: !p.shuffle)
                         else -> return@onMain false
@@ -300,6 +317,27 @@ class WebControl(private val context: Context, private val vm: LibraryViewModel)
             }
             s == listOf("status") -> ok(onMain { statusJson() })
             s == listOf("queue") -> ok(onMain { queueJson() })
+            // Play a queued song now: /queue/general/{index}/play or /queue/next/{index}/play, ?id=<song id>
+            // (index into the whole queue; the id guards against the queue having changed since it was fetched).
+            s.size == 4 && s[0] == "queue" && s[1] in setOf("general", "next") && s[3] == "play" -> {
+                if (!post) return error(405, "Use POST")
+                val index = s[2].toIntOrNull() ?: return error(400, "Bad index")
+                val wanted = req.query["id"]
+                val result = onMain {
+                    val q = vm.playback.queue
+                    val list = if (s[1] == "general") q.general else q.next
+                    val song = list.getOrNull(index) ?: return@onMain 404
+                    if (wanted != null && id(song.uri.toString()) != wanted) return@onMain 409
+                    if (s[1] == "general") vm.playback.playFromGeneral(index) else vm.playback.playFromNext(index)
+                    if (req.query["keepPaused"]?.toBooleanStrictOrNull() == true) vm.playback.pause()
+                    200
+                }
+                when (result) {
+                    200 -> ok(onMain { statusJson() })
+                    409 -> error(409, "The queue changed; fetch it again")
+                    else -> error(404, "No song at that position")
+                }
+            }
             else -> error(404, "Unknown endpoint")
         }
     }
@@ -353,6 +391,7 @@ class WebControl(private val context: Context, private val vm: LibraryViewModel)
         .put("disc", s.discNumber)
         .put("year", s.year)
         .put("durationMs", s.durationMs)
+        .put("sizeBytes", s.sizeBytes) // 0 = unknown (Jellyfin)
         .put("source", if (Jellyfin.isJellyfin(s)) "jellyfin" else "local")
         .put("albumId", LibraryGrouping.albumKey(s)?.let { id("album:$it") } ?: JSONObject.NULL)
 
@@ -404,6 +443,8 @@ class WebControl(private val context: Context, private val vm: LibraryViewModel)
             .put("historyTotal", q.historySize)
             .put("playNextTotal", q.next.size)
             .put("generalTotal", upcoming.size)
+            // Index of "general"[0] in the whole general queue (for /queue/general/{index}/play).
+            .put("generalStart", q.returnIndex + 1)
     }
 
     private fun art(source: ArtSource?, req: WebServer.Request): WebServer.Response {

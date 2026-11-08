@@ -38,12 +38,21 @@ object WakeLaunch {
 
     fun setEnabled(context: Context, on: Boolean) {
         context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putBoolean(KEY, on).apply()
-        if (on) start(context) else context.stopService(Intent(context, WakeLaunchService::class.java))
+        syncService(context)
     }
 
-    /** Starts the service if the setting is on. Must be called while the app is in front, or at boot. */
+    /** The service runs while Open on wake or [StayOnTop] is on. */
+    fun syncService(context: Context) {
+        if (isEnabled(context) || StayOnTop.isOn(context)) {
+            start(context)
+        } else {
+            context.stopService(Intent(context, WakeLaunchService::class.java))
+        }
+    }
+
+    /** Starts the service if a setting needs it. Must be called while the app is in front, or at boot. */
     fun startIfEnabled(context: Context) {
-        if (isEnabled(context)) start(context)
+        if (isEnabled(context) || StayOnTop.isOn(context)) start(context)
     }
 
     /** "Display over other apps": without it Android blocks the app from opening itself. */
@@ -62,6 +71,11 @@ class WakeLaunchService : Service() {
     private val unlockReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (!WakeLaunch.canOpenFromBackground(context)) return
+            if (StayOnTop.isOn(context)) {
+                StayOnTop.bringBack(context, showSplash = WakeLaunch.isEnabled(context))
+                return
+            }
+            if (!WakeLaunch.isEnabled(context)) return
             val launch = (packageManager.getLaunchIntentForPackage(packageName) ?: Intent(context, MainActivity::class.java))
                 // SINGLE_TOP: an open player gets onNewIntent (and replays the splash) instead of a second copy.
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -94,7 +108,7 @@ class WakeLaunchService : Service() {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "Open on wake", NotificationManager.IMPORTANCE_MIN).apply {
-                description = "Shown while the app waits to open when the phone is unlocked"
+                description = "Shown while the app waits to open when the phone is unlocked, or stays on top"
                 setShowBadge(false)
             },
         )
@@ -109,8 +123,11 @@ class WakeLaunchService : Service() {
         val icon = custom?.let { Icon.createWithBitmap(it) } ?: Icon.createWithResource(this, android.R.drawable.ic_media_play)
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(icon)
-            .setContentTitle("Open on wake is on")
-            .setContentText("Opens the player when the phone is unlocked. Turn off in Settings.")
+            .setContentTitle(if (StayOnTop.isOn(this)) "Stay on top is on" else "Open on wake is on")
+            .setContentText(
+                if (StayOnTop.isOn(this)) "Keeps the player in front while unlocked. Tap the pin to turn off."
+                else "Opens the player when the phone is unlocked. Turn off in Settings.",
+            )
             .setContentIntent(open)
             .setOngoing(true)
             .build()

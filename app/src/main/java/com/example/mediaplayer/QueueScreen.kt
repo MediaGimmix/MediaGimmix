@@ -1,5 +1,6 @@
 package com.example.mediaplayer
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -114,6 +115,7 @@ fun QueueTab(playback: Playback, art: (Song) -> ArtSource? = { ArtSource.FromSon
                     if (i < next.lastIndex) add(MenuAction("Move down") { queue.moveNext(i, i + 1) })
                     add(MenuAction("Remove") { queue.removeNext(i) })
                 },
+                onClick = { playback.playFromNext(i) },
             )
         }
 
@@ -145,6 +147,7 @@ fun QueueTab(playback: Playback, art: (Song) -> ArtSource? = { ArtSource.FromSon
                     if (i < general.lastIndex) add(MenuAction("Move down") { queue.moveGeneral(i, i + 1) })
                     add(MenuAction("Remove") { queue.removeGeneral(i) })
                 },
+                onClick = { playback.playFromGeneral(i) },
             )
         }
     }
@@ -175,9 +178,17 @@ private fun Hint(text: String) {
 }
 
 @Composable
-private fun QueueRow(song: Song, art: ArtSource?, subtitle: String?, dimmed: Boolean, actions: List<MenuAction>) {
+private fun QueueRow(
+    song: Song,
+    art: ArtSource?,
+    subtitle: String?,
+    dimmed: Boolean,
+    actions: List<MenuAction>,
+    onClick: () -> Unit,
+) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 3.dp, bottom = 3.dp),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)
+            .padding(start = 12.dp, end = 4.dp, top = 3.dp, bottom = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RowCover(art, song.displayTitle)
