@@ -156,7 +156,7 @@ Install with `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
   android:allowBackup="false"
 
 ## Companion app ("Player Remote", module `companion/`)
-Build `./gradlew :companion:assembleDebug`, install on the user's Samsung: `adb -s <phone serial> install -r
+Build `./gradlew :companion:assembleDebug`, install on your phone: `adb -s <phone serial> install -r
 companion/build/outputs/apk/debug/companion-debug.apk` (the JM21 is picked with `adb -t <transport id>`).
 - Talks only to the player's web control API (`Api.kt`, HttpURLConnection + org.json, no libraries). Must never fetch
   whole library lists: search, playlists and single albums/artists/playlists only

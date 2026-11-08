@@ -1,12 +1,34 @@
-.gradle/
+# ---- Build output (Gradle, Kotlin, NDK/CMake) ----
 build/
-local.properties
-env.sh
-*.iml
-.idea/
+.gradle/
 .kotlin/
+.cxx/
+.externalNativeBuild/
 captures/
 *.apk
 *.aab
+*.ap_
+*.dex
+*.class
+output-metadata.json
+
+# ---- Machine-specific ----
+# env.sh points at your JDK/SDK; local.properties at your Android SDK.
+env.sh
+local.properties
+
+# ---- Signing keys: never commit ----
+*.jks
+*.keystore
+keystore.properties
+
+# ---- IDE / OS ----
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+
+# ---- Tooling ----
 .source-backups/
-.cxx/
+.claude/settings.local.json
