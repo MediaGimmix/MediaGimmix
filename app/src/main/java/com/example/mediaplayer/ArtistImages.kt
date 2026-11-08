@@ -124,7 +124,7 @@ object ArtistImages {
         try {
             c.connectTimeout = 10_000
             c.readTimeout = 20_000
-            c.setRequestProperty("User-Agent", "MediaPlayer/0.1")
+            c.setRequestProperty("User-Agent", "MediaGimmix/0.1")
             if (c.responseCode == 404) return null
             if (c.responseCode !in 200..299) throw java.io.IOException("HTTP ${c.responseCode}")
             c.inputStream.use { input ->

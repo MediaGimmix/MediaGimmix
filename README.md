@@ -1,4 +1,4 @@
-# Media Player (+ Player Remote)
+# MediaGimmix (+ MediaGimmix Remote)
 
 **No artwork in this repository is AI-generated.** Icons are Google's Material Symbols and Noto Color
 Emoji (both Apache 2.0) or the author's own art; every image can be swapped for your own (see
@@ -10,7 +10,7 @@ an independent personal project, not affiliated with or endorsed by Poweramp or 
 code or artwork with them.
 
 It's an offline-first Android player written in Kotlin and Jetpack Compose, built for a **FiiO JM21**
-digital audio player (Android 13, no Google services), plus **Player Remote**, a companion app that
+digital audio player (Android 13, no Google services), plus **MediaGimmix Remote**, a companion app that
 controls it from a phone over Wi-Fi or Bluetooth.
 
 The project was "vibecoded": the code was written entirely by an AI coding assistant (Claude), with my
@@ -21,7 +21,7 @@ No Google libraries or services at runtime, no analytics, no telemetry. The only
 traffic is to servers you set up (Jellyfin), Deezer for artist pictures (optional, can be
 switched off) and Last.fm in the companion (only if you sign in).
 
-## Media Player (the main app, `app/`)
+## MediaGimmix (the main app, `app/`)
 
 **Library**
 - Pick music folders (Storage Access Framework); quick and full scans into a local SQLite cache
@@ -50,7 +50,7 @@ switched off) and Last.fm in the companion (only if you sign in).
 - Kill switches for internet access, local-network requests and Bluetooth requests
 - Optional YubiKey (USB, HMAC challenge-response) lock for the Jellyfin sign-in
 
-## Player Remote (the companion app, `companion/`)
+## MediaGimmix Remote (the companion app, `companion/`)
 
 - Player screen (no seek bar while the player plays), playlists, search (capped results), queue and *Play next*
 - Connects over Wi-Fi or Bluetooth to a paired player, and keeps retrying every 5 s while it's out of reach
@@ -73,7 +73,7 @@ for your machine.
 
 ```bash
 ./gradlew :app:assembleDebug          # the player
-./gradlew :companion:assembleDebug    # Player Remote
+./gradlew :companion:assembleDebug    # MediaGimmix Remote
 ```
 
 Install with `adb install -r app/build/outputs/apk/debug/app-debug.apk` (and
@@ -83,7 +83,7 @@ Install with `adb install -r app/build/outputs/apk/debug/app-debug.apk` (and
 
 1. On the player: Settings → Network → **Web control** (Wi-Fi) or **Bluetooth control** (pair the devices
    first in Android's Bluetooth settings). Both use the same access key, shown on those pages.
-2. In Player Remote → Settings: choose Wi-Fi (address + port) or Bluetooth (pick the paired player), enter the key.
+2. In MediaGimmix Remote → Settings: choose Wi-Fi (address + port) or Bluetooth (pick the paired player), enter the key.
 
 The API's endpoints are listed at the top of `app/src/main/java/com/example/mediaplayer/WebControl.kt`.
 

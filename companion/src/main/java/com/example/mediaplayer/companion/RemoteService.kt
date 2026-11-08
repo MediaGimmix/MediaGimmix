@@ -31,7 +31,7 @@ import kotlinx.coroutines.withContext
  * reports a duration or offers seeking, so Android draws no bar. Buttons send commands to the player.
  *
  * Runs as a foreground service while the player has a song loaded, so the notification keeps up while
- * Player Remote is in the background (polls the player every [POLL_MS]). Stops itself when the player
+ * MediaGimmix Remote is in the background (polls the player every [POLL_MS]). Stops itself when the player
  * stops or with the notification's ✕ button; while the player can't be reached it shows "Looking for…" and retries every 5 s.
  */
 class RemoteService : Service() {
@@ -54,7 +54,7 @@ class RemoteService : Service() {
                 setShowBadge(false)
             },
         )
-        session = MediaSession(this, "PlayerRemote").apply {
+        session = MediaSession(this, "MediaGimmixRemote").apply {
             // Buttons go to the phone's own playback while listening here, else to the player.
             setCallback(object : MediaSession.Callback() {
                 override fun onPlay() = if (LocalPlayer.active) LocalPlayer.resume() else send("play")
@@ -221,7 +221,7 @@ class RemoteService : Service() {
         )
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(icon("notification", android.R.drawable.ic_media_play))
-            .setContentTitle(song?.title ?: "Player Remote")
+            .setContentTitle(song?.title ?: "MediaGimmix Remote")
             .setContentText(song?.subtitle ?: "Connecting to the player…")
             .setLargeIcon(art)
             .setContentIntent(open)

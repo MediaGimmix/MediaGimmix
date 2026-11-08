@@ -272,7 +272,7 @@ class Playback(
             DefaultDataSource.Factory(
                 context,
                 DefaultHttpDataSource.Factory()
-                    .setUserAgent("MediaPlayer/0.1")
+                    .setUserAgent("MediaGimmix/0.1")
                     .setConnectTimeoutMs(10_000)
                     .setReadTimeoutMs(30_000)
                     .setAllowCrossProtocolRedirects(true),

@@ -133,7 +133,7 @@ class BluetoothControl(private val context: Context, private val web: WebControl
     }
 
     companion object {
-        private const val SERVICE_NAME = "Media Player API"
+        private const val SERVICE_NAME = "MediaGimmix API"
         private const val KEY_AUTOSTART = "bt_autostart"
         /** Shared with the companion app (BluetoothLink.kt). */
         val SERVICE_UUID: UUID = UUID.fromString("b0d63ac8-81d4-4769-90ba-e4f52e0da7a8")

@@ -80,7 +80,7 @@ object LastFm {
             conn.readTimeout = 15_000
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-            conn.setRequestProperty("User-Agent", "PlayerRemote/0.1")
+            conn.setRequestProperty("User-Agent", "MediaGimmixRemote/0.1")
             conn.outputStream.use { it.write(body.toByteArray()) }
             val code = conn.responseCode
             val text = (if (code in 200..299) conn.inputStream else conn.errorStream)

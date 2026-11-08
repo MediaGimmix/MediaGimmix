@@ -359,7 +359,7 @@ object Jellyfin {
     private class HttpError(val code: Int) : IOException("HTTP $code")
 
     private fun authHeader(token: String?): String =
-        "MediaBrowser Client=\"Media Player\", Device=\"${Build.MODEL}\", DeviceId=\"$deviceId\", Version=\"0.1.0\"" +
+        "MediaBrowser Client=\"MediaGimmix\", Device=\"${Build.MODEL}\", DeviceId=\"$deviceId\", Version=\"0.1.0\"" +
             (token?.let { ", Token=\"$it\"" } ?: "")
 
     private fun open(method: String, url: String, token: String?): HttpURLConnection {

@@ -30,7 +30,7 @@ Menu items (queue rows, song rows, album/playlist tiles, now playing "..." menu)
 Queue headers, splash and Quick Settings tile
   header_play_next.png     Queue: "Play next" header
   header_queue.png         Queue: "Queue" header
-  splash.png               Startup splash, above "Media Player" (shown at 128 dp)
+  splash.png               Startup splash, above "MediaGimmix" (shown at 128 dp)
   tile_media.png           "Media" Quick Settings tile. Android tints it to one colour, so only the
                            shape (transparency) matters. Deleted = Android's default tile icon.
 

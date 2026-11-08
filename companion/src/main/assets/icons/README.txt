@@ -1,4 +1,4 @@
-Player Remote (companion app) icons. Every file is optional: without it the built-in
+MediaGimmix Remote (companion app) icons. Every file is optional: without it the built-in
 Material icon is used. Put your own PNGs here with these names and rebuild.
 
   button_play.png          Play
