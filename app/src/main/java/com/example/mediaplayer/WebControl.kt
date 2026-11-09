@@ -137,7 +137,7 @@ class WebControl(private val context: Context, private val vm: LibraryViewModel)
     }.getOrDefault(emptyList())
 
     private fun start() {
-        if (running) return
+        if (running || !BuildConfig.FEATURE_WEB_CONTROL) return
         if (!NetPolicy.localApi) {
             error = "Local network requests are off (Settings → Network)."
             return

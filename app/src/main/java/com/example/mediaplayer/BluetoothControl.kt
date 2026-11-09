@@ -66,7 +66,7 @@ class BluetoothControl(private val context: Context, private val web: WebControl
 
     @SuppressLint("MissingPermission") // checked in hasPermission()
     private fun start() {
-        if (running) return
+        if (running || !BuildConfig.FEATURE_BLUETOOTH_CONTROL) return
         if (!NetPolicy.bluetoothApi) {
             error = "Bluetooth requests are off (Settings → Network → Network switches)."
             return

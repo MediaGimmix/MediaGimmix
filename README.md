@@ -44,6 +44,12 @@ switched off) and Last.fm in the companion (only if you sign in).
 - Media notification with seek bar, Quick Settings tile, startup splash
 - *Open on wake* and *Stay on top* (a Pure Music-style mode that keeps the player in front)
 
+**Downloads**
+- yt-dlp downloader (Settings → Library → Downloader): paste a link (e.g. from your own media server), save the track
+  (converted to MP3 with tags and cover) or video (MP4) into a folder you pick once; the library rescans for new tracks
+- Track info (Settings → Library → Track info): recently added tracks with missing tags flagged; tap one for suggestions
+  from its filename and MusicBrainz, and write your pick into the file (MP3, M4A, FLAC, OGG)
+
 **Control and network**
 - Web control: a JSON API on your local network (off at every start; access key; list limits)
 - The same API over classic Bluetooth (RFCOMM) for the companion app
@@ -75,6 +81,28 @@ for your machine.
 ./gradlew :app:assembleDebug          # the player
 ./gradlew :companion:assembleDebug    # MediaGimmix Remote
 ```
+
+### Leaving features out
+
+Every network feature can be left out of the build with a Gradle property (add `-P...` to the command, or
+put `mg.noJellyfin=true` etc. in `gradle.properties`):
+
+| Flag | Leaves out |
+|---|---|
+| `-Pmg.noDownloader` | the yt-dlp downloader, and its bundled Python/ffmpeg (about 40 MB) |
+| `-Pmg.noJellyfin` | the Jellyfin section and sign-in, plus the YubiKey lock (it only guards Jellyfin) and its library |
+| `-Pmg.noWebControl` | the web control API server |
+| `-Pmg.noBluetoothControl` | the API over Bluetooth, and the Bluetooth permissions |
+| `-Pmg.noArtistPictures` | artist pictures from Deezer |
+| `-Pmg.noMusicBrainz` | MusicBrainz suggestions in Track info (filename suggestions stay) |
+| `-Pmg.offline` | all of the above; the app then doesn't even ask for internet access |
+
+```bash
+./gradlew :app:assembleDebug -Pmg.offline
+```
+
+Left-out features stay visible in the app, greyed out with a note to rebuild with network features, and
+Settings → About lists what was left out.
 
 Install with `adb install -r app/build/outputs/apk/debug/app-debug.apk` (and
 `companion/build/outputs/apk/debug/companion-debug.apk` on the phone).

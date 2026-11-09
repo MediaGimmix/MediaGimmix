@@ -646,6 +646,8 @@ private fun LibraryHome(vm: LibraryViewModel, onAddFolder: () -> Unit, onOpen: (
         }
         item { HorizontalDivider() }
         items(LibrarySection.entries) { s ->
+            // A feature left out of this build stays listed, greyed out, with how to get it.
+            val builtIn = s != LibrarySection.JELLYFIN || BuildConfig.FEATURE_JELLYFIN
             val subtitle = when (s) {
                 LibrarySection.SONGS -> "${"%,d".format(vm.songs.size)} songs"
                 LibrarySection.PLAYLISTS -> "${vm.playlists.size} playlists"
@@ -655,6 +657,7 @@ private fun LibraryHome(vm: LibraryViewModel, onAddFolder: () -> Unit, onOpen: (
                 LibrarySection.RECENTLY_ADDED -> "Newest ${vm.recentlyAdded.size}"
                 LibrarySection.LONG -> "${"%,d".format(vm.longSongs.size)} songs"
                 LibrarySection.JELLYFIN -> when {
+                    !builtIn -> NOT_BUILT_IN
                     vm.jellyfinAccount == null -> "Not signed in: Settings → Jellyfin"
                     vm.jellyfinLocked -> "Locked: plug in a trusted YubiKey"
                     vm.jellyfinBusy -> "Syncing..."
@@ -664,7 +667,7 @@ private fun LibraryHome(vm: LibraryViewModel, onAddFolder: () -> Unit, onOpen: (
             MenuRow(
                 label = s.label,
                 subtitle = subtitle,
-                enabled = s.implemented,
+                enabled = s.implemented && builtIn,
                 onClick = { onOpen(s) },
                 icon = AppIcons.forSection(s),
             )
@@ -1016,3 +1019,6 @@ internal fun SongRow(
         RowMenu(actions)
     }
 }
+
+/** Shown on entries and settings for features left out with the -Pmg.no* build flags (see the README). */
+internal const val NOT_BUILT_IN = "Not in this build: rebuild with network features"

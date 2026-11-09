@@ -156,6 +156,26 @@ Install with `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
   `account` (null while locked). Settings page "YubiKey": status, Lock now, trusted keys (rename, de-trust), register.
   android:allowBackup="false"
 
+## Optional features (build flags)
+- `-Pmg.noDownloader`, `-Pmg.noJellyfin` (also YubiKey), `-Pmg.noWebControl`, `-Pmg.noBluetoothControl`,
+  `-Pmg.noArtistPictures`, `-Pmg.noMusicBrainz`, `-Pmg.offline` (all). Read in app/build.gradle.kts (`featureFlag`) -> `BuildConfig.FEATURE_*`
+  + `FEATURES_OMITTED` (About "Left out"). Downloader and `YubiKeyUsb` live in src/downloader|yubikey with do-nothing
+  stand-ins in src/downloaderStub|yubikeyStub (same API), picked by sourceSets; their libraries only added when built
+  in. Unneeded permissions removed via a generated manifest overlay (debug/release source sets, tools:node="remove").
+  Left-out features stay visible but greyed with `NOT_BUILT_IN` ("rebuild with network features"): `SettingsPage.available`,
+  `SettingsCategory.available`, `SwitchRow(builtIn)`, the Jellyfin menu row; startup/servers check the flags too
+- yt-dlp downloader (`Downloader.kt` in src/downloader; youtubedl-android 0.18.1 + ffmpeg, needs extractNativeLibs /
+  legacy jniLibs packaging): Settings → Library → Downloader. Downloads to filesDir/ytdlp, copies into the SAF folder
+  picked once per kind ("dl_audio_folder"/"dl_video_folder", Change button), quick rescan after tracks. Tracks
+  `-f bestaudio/best -x --audio-format mp3 --audio-quality 0 --embed-thumbnail` + --embed-metadata; videos `bv*+ba/b` merged to MP4. NetPolicy.check on the link;
+  "Update" (yt-dlp from GitHub) needs internet on. Cookies: user-imported Netscape cookies.txt (SAF picker) copied to
+  filesDir/ytdlp_cookies.txt and passed as --cookies; UI shows only the domains (Import / Remove)
+
+- Track info (`TrackInfo.kt`, Settings → Library → Track info): `vm.recentlyAdded` rows (`looksUntagged` flagged);
+  dialog offers `fromFilename` splits (yt-dlp [id] / video noise stripped) + `searchMusicBrainz` (ws/2 recording search,
+  UA with the repo URL, NetPolicy.check, gated by FEATURE_MUSICBRAINZ). Write = jaudiotagger 3.0.1 on a cacheDir copy
+  (TagOptionSingleton.isAndroid), copied back with openOutputStream("wt"), then a quick rescan. Formats: mp3/m4a/flac/ogg...
+
 ## Companion app ("MediaGimmix Remote", module `companion/`)
 Build `./gradlew :companion:assembleDebug`, install on your phone: `adb -s <phone serial> install -r
 companion/build/outputs/apk/debug/companion-debug.apk` (the JM21 is picked with `adb -t <transport id>`).

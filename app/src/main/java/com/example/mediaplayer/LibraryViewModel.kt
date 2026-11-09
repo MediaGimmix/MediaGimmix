@@ -117,6 +117,17 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     val web = WebControl(app, this)
     /** The API over Bluetooth (own switch, off at every start like [web]). */
     val bluetooth = BluetoothControl(app, web)
+    /** Writes [option] into [song]'s tags (Settings → Library → Track info), then rescans. [done] gets an error or null. */
+    fun writeTrackInfo(song: Song, option: TrackInfo.Option, done: (String?) -> Unit) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { TrackInfo.write(getApplication(), song, option) } }
+            if (result.isSuccess) rescan(full = false)
+            done(result.exceptionOrNull()?.let { it.message ?: it.javaClass.simpleName })
+        }
+    }
+
+    /** yt-dlp downloads (Settings → Library → Downloader); new tracks trigger a quick scan. */
+    val downloader = Downloader(app, viewModelScope) { rescan(full = false) }
 
     // ---- Jellyfin (a separate library; see Jellyfin.kt)
     /** Signed-in account (also while locked; its token is never shown). */
@@ -152,7 +163,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         NetPolicy.init(app)
-        bluetooth.startIfWanted() // "Start with the app" (Settings → Network → Bluetooth control)
+        if (BuildConfig.FEATURE_BLUETOOTH_CONTROL) bluetooth.startIfWanted() // "Start with the app" (Settings → Network → Bluetooth control)
         viewModelScope.launch {
             artistPhotoIds = withContext(Dispatchers.IO) { ArtistImages.downloadedIds(app) }
         }
@@ -166,7 +177,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
             }
             reload()
             loading = false
-            loadJellyfin()
+            if (BuildConfig.FEATURE_JELLYFIN) loadJellyfin()
             // Only scan on startup if folders exist but nothing has ever been stored.
             if (neverScanned) rescan(full = false)
         }
@@ -266,7 +277,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
 
     // After the properties above exist (init blocks run in order).
     init {
-        runCatching {
+        if (BuildConfig.FEATURE_ARTIST_PICTURES) runCatching {
             connectivity.registerNetworkCallback(
                 NetworkRequest.Builder()
                     .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
@@ -279,6 +290,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Looks up pictures for artists that have none, while on Wi-Fi with internet access on. */
     fun fetchArtistPictures() {
+        if (!BuildConfig.FEATURE_ARTIST_PICTURES) return // left out of this build
         if (artistFetch?.isActive == true) return
         if (!onWifi) {
             artistFetchStatus = "Waiting for Wi-Fi"

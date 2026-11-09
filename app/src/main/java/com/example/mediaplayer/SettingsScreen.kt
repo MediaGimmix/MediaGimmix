@@ -1,6 +1,10 @@
 package com.example.mediaplayer
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.material3.FilterChip
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -97,12 +101,18 @@ fun SettingsScreen(
                 val c = category
                 if (c == null) {
                     items(SettingsCategory.entries) { cat ->
-                        SettingsPageRow(cat.title, cat.summary, onClick = { category = cat })
+                        SettingsPageRow(
+                            cat.title, if (cat.available) cat.summary else NOT_BUILT_IN,
+                            enabled = cat.available, onClick = { category = cat },
+                        )
                     }
                     item { AboutInfo(vm) }
                 } else {
                     items(c.pages) { p ->
-                        SettingsPageRow(p.title, p.summary, onClick = { page = p })
+                        SettingsPageRow(
+                            p.title, if (p.available) p.summary else NOT_BUILT_IN,
+                            enabled = p.available, onClick = { page = p },
+                        )
                     }
                 }
             }
@@ -255,6 +265,19 @@ fun SettingsScreen(
             }
             SettingsPage.STAY_ON_TOP -> {
                 item { StayOnTopSettings() }
+            }
+            SettingsPage.TRACK_INFO -> {
+                item {
+                    Note(
+                        "Recently added tracks, newest first. Tap one for suggested tags (from its filename" +
+                            (if (BuildConfig.FEATURE_MUSICBRAINZ) " and MusicBrainz" else "") + ") and write your pick " +
+                            "into the file. Works for MP3, M4A, FLAC and OGG.",
+                    )
+                }
+                items(vm.recentlyAdded, key = { it.uri.toString() }) { song -> TrackInfoRow(vm, song) }
+            }
+            SettingsPage.DOWNLOADER -> {
+                item { DownloaderSettings(vm.downloader) }
             }
             SettingsPage.ARTIST_ART -> {
                 item { ArtistArtworkSettings(vm) }
@@ -721,22 +744,28 @@ private fun WebControlSettings(web: WebControl) {
 private fun NetworkSettings(vm: LibraryViewModel) {
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
         SwitchRow(
-            "Internet access",
+            builtIn = BuildConfig.FEATURE_JELLYFIN || BuildConfig.FEATURE_ARTIST_PICTURES || BuildConfig.FEATURE_DOWNLOADER,
+            title = "Internet access",
+            description =
             "Requests to the open internet: artist pictures, and a Jellyfin server on a public address. " +
                 "Off = nothing leaves the local network. A Jellyfin server at home keeps working.",
-            NetPolicy.internet,
+            checked = NetPolicy.internet,
         ) { vm.setInternetAccess(it) }
         SwitchRow(
-            "Local network requests",
+            builtIn = BuildConfig.FEATURE_WEB_CONTROL,
+            title = "Local network requests",
+            description =
             "Companion apps, scripts and anything else calling the web control API. Off = the API server " +
                 "stops and can't be switched on.",
-            NetPolicy.localApi,
+            checked = NetPolicy.localApi,
         ) { vm.setLocalApiAccess(it) }
         SwitchRow(
-            "Bluetooth requests",
+            builtIn = BuildConfig.FEATURE_BLUETOOTH_CONTROL,
+            title = "Bluetooth requests",
+            description =
             "The same API over Bluetooth, from a paired phone (the companion app). Off = Bluetooth control " +
                 "stops and can't be switched on. Separate from the local network switch.",
-            NetPolicy.bluetoothApi,
+            checked = NetPolicy.bluetoothApi,
         ) { vm.setBluetoothApiAccess(it) }
     }
 }
@@ -773,6 +802,7 @@ private fun AboutInfo(vm: LibraryViewModel) {
         SelectionContainer {
             Column {
                 InfoRowPadded("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · ${BuildConfig.BUILD_TYPE}")
+                if (BuildConfig.FEATURES_OMITTED.isNotEmpty()) InfoRowPadded("Left out", BuildConfig.FEATURES_OMITTED)
                 InfoRowPadded("Commit", BuildConfig.GIT_COMMIT)
                 InfoRowPadded("Built", BuildConfig.BUILD_TIME)
                 InfoRowPadded("Package", BuildConfig.APPLICATION_ID)
@@ -898,13 +928,261 @@ private fun StayOnTopSettings() {
 }
 
 @Composable
-private fun SwitchRow(title: String, description: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+private fun DownloaderSettings(dl: Downloader) {
+    val context = LocalContext.current
+    var url by rememberSaveable { mutableStateOf("") }
+    var video by rememberSaveable { mutableStateOf(false) }
+    // Which folder the picker is for (only opened with a Change button, then remembered).
+    var pickingVideo by remember { mutableStateOf(false) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            val rw = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            runCatching { context.contentResolver.takePersistableUriPermission(uri, rw) }
+            dl.setFolder(pickingVideo, uri.toString())
+        }
+    }
+    fun choose(forVideo: Boolean) {
+        pickingVideo = forVideo
+        StayOnTop.allowLeaving() // the folder picker
+        picker.launch(null)
+    }
+    val cookiePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) dl.importCookies(uri)
+    }
+    LaunchedEffect(Unit) { dl.prepare() }
+
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            value = url,
+            onValueChange = { url = it.trim() },
+            label = { Text("Link (from your media server)") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            FilterChip(selected = !video, onClick = { video = false }, label = { Text("Track (audio)") })
+            FilterChip(selected = video, onClick = { video = true }, label = { Text("Video") })
+            Spacer(modifier = Modifier.weight(1f))
+            if (dl.running) {
+                OutlinedButton(onClick = { dl.cancel() }) { Text("Cancel") }
+            } else {
+                Button(onClick = { dl.download(url, video) }, enabled = url.isNotBlank()) { Text("Download") }
+            }
+        }
+        if (dl.running || dl.status.isNotEmpty()) {
+            if (dl.running) {
+                if (dl.progress >= 0f) {
+                    LinearProgressIndicator(progress = { dl.progress / 100f }, modifier = Modifier.fillMaxWidth())
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+            }
+            Text(dl.status, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        }
+        dl.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
+
+        SubTitleInline("Folders")
+        FolderChoice("Tracks go to", dl.folderLabel(dl.audioFolder), dl.audioFolder == null, enabled = !dl.running) { choose(false) }
+        FolderChoice("Videos go to", dl.folderLabel(dl.videoFolder), dl.videoFolder == null, enabled = !dl.running) { choose(true) }
+        Note(
+            "Chosen once and remembered. Tracks are saved as MP3 (best quality) with their tags and cover, and the " +
+                "library rescans afterwards if the folder is one of your music folders. Videos are saved as MP4.",
+            horizontalPadding = 0,
+        )
+
+        SubTitleInline("Sign-in cookies")
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                dl.cookieSites?.let { "For: $it" } ?: "None",
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (dl.cookieSites != null) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (dl.cookieSites != null) {
+                TextButton(onClick = { dl.clearCookies() }, enabled = !dl.running) { Text("Remove") }
+            }
+            OutlinedButton(onClick = {
+                StayOnTop.allowLeaving() // the file picker
+                cookiePicker.launch(arrayOf("text/plain", "*/*"))
+            }, enabled = !dl.running) { Text("Import") }
+        }
+        Note(
+            "For servers that need you signed in (cookie auth): export a cookies.txt from your browser and import it " +
+                "here. It's kept privately in the app and sent to yt-dlp with every download; only the site names " +
+                "are shown. Re-import when your login expires.",
+            horizontalPadding = 0,
+        )
+
+        SubTitleInline("yt-dlp")
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Version ${dl.version ?: "…"}", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            OutlinedButton(onClick = { dl.updateYtDlp() }, enabled = !dl.running) { Text("Update") }
+        }
+        Note(
+            "Sites change and old yt-dlp versions stop working; Update fetches the newest one from GitHub " +
+                "(needs internet access on). Links to the open internet are refused while internet access is off; " +
+                "your home server always works.",
+            horizontalPadding = 0,
+        )
+    }
+}
+
+@Composable
+private fun TrackInfoRow(vm: LibraryViewModel, song: Song) {
+    var open by remember { mutableStateOf(false) }
+    val untagged = TrackInfo.looksUntagged(song)
+    Column(
+        modifier = Modifier.fillMaxWidth().clickable { open = true }.padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        Text(song.displayTitle, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+            (if (untagged) "Tags look missing · " else (song.artist?.let { "$it · " } ?: "")) + song.fileName,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (untagged) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+    if (open) TrackInfoDialog(vm, song, onClose = { open = false })
+}
+
+/** Suggested tags for one track; pick one, then Write. */
+@Composable
+private fun TrackInfoDialog(vm: LibraryViewModel, song: Song, onClose: () -> Unit) {
+    val fromName = remember(song) { TrackInfo.fromFilename(song) }
+    var mb by remember(song) { mutableStateOf<List<TrackInfo.Option>?>(null) }
+    var mbProblem by remember(song) { mutableStateOf<String?>(null) }
+    var chosen by remember(song) { mutableStateOf<TrackInfo.Option?>(null) }
+    var writing by remember { mutableStateOf(false) }
+    var problem by remember { mutableStateOf<String?>(null) }
+    val writable = TrackInfo.canWrite(song)
+
+    // MusicBrainz: search with the current tags if they look right, else the filename's best guess.
+    LaunchedEffect(song) {
+        if (!BuildConfig.FEATURE_MUSICBRAINZ) return@LaunchedEffect
+        if (!NetPolicy.internet) {
+            mbProblem = "Internet access is off (Settings → Network)."
+            return@LaunchedEffect
+        }
+        val guess = if (!TrackInfo.looksUntagged(song)) TrackInfo.Option(song.title ?: "", song.artist, source = "")
+        else fromName.first()
+        val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { TrackInfo.searchMusicBrainz(guess.title, guess.artist) }
+        }
+        result.onSuccess { mb = it }.onFailure { mbProblem = "MusicBrainz: ${it.message}" }
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!writing) onClose() },
+        title = { Text(song.displayTitle, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        text = {
+            Column(modifier = Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())) {
+                Text(song.fileName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    "Now: " + listOfNotNull(song.artist, song.album, song.year.takeIf { it > 0 }?.toString()).joinToString(" · ")
+                        .ifEmpty { "no tags" },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (!writable) {
+                    Text(
+                        "This file's format can't be edited (only MP3, M4A, FLAC, OGG...). New downloads are MP3.",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+                SubTitleInline("From the filename")
+                fromName.forEach { o -> OptionRow(o, chosen == o, enabled = writable) { chosen = o } }
+                SubTitleInline("MusicBrainz")
+                when {
+                    !BuildConfig.FEATURE_MUSICBRAINZ -> Text(
+                        NOT_BUILT_IN, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    )
+                    mbProblem != null -> Text(mbProblem!!, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    mb == null -> Text("Searching…", style = MaterialTheme.typography.bodySmall)
+                    mb!!.isEmpty() -> Text("No matches.", style = MaterialTheme.typography.bodySmall)
+                    else -> mb!!.forEach { o -> OptionRow(o, chosen == o, enabled = writable) { chosen = o } }
+                }
+                problem?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 8.dp)) }
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = chosen != null && writable && !writing,
+                onClick = {
+                    val o = chosen ?: return@Button
+                    writing = true
+                    problem = null
+                    vm.writeTrackInfo(song, o) { err ->
+                        writing = false
+                        if (err == null) onClose() else problem = err
+                    }
+                },
+            ) { Text(if (writing) "Writing…" else "Write tags") }
+        },
+        dismissButton = { TextButton(onClick = onClose, enabled = !writing) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun OptionRow(o: TrackInfo.Option, selected: Boolean, enabled: Boolean, onSelect: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onSelect)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = null, enabled = enabled)
+        Column(modifier = Modifier.padding(start = 8.dp)) {
+            Text(o.title, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            val details = listOfNotNull(
+                o.artist, o.album, o.year?.toString(), o.track?.let { "track $it" },
+            ).joinToString(" · ")
+            if (details.isNotEmpty()) Text(details, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun FolderChoice(label: String, folder: String, missing: Boolean, enabled: Boolean, onChange: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                folder,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (missing) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        OutlinedButton(onClick = onChange, enabled = enabled) { Text(if (missing) "Choose" else "Change") }
+    }
+}
+
+@Composable
+private fun SwitchRow(
+    title: String,
+    description: String,
+    checked: Boolean,
+    builtIn: Boolean = true,
+    onChange: (Boolean) -> Unit,
+) {
+    val alpha = if (builtIn) 1f else 0.4f
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 6.dp)) {
         Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha))
+            Text(
+                if (builtIn) description else NOT_BUILT_IN,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha),
+            )
         }
-        Switch(checked = checked, onCheckedChange = onChange)
+        Switch(checked = checked && builtIn, onCheckedChange = onChange, enabled = builtIn)
     }
 }
 
@@ -995,9 +1273,26 @@ enum class SettingsPage(val title: String, val summary: String) {
     ARTISTS("Artist names", "Splitting artist tags, whitelist"),
     ARTWORK("Artwork cache", "Album and playlist covers"),
     ARTIST_ART("Artist artwork", "Downloaded artist pictures"),
+    DOWNLOADER("Downloader", "Download tracks and videos with yt-dlp"),
+    TRACK_INFO("Track info", "Fix the tags of recently added tracks"),
     STARTUP("Startup", "Splash screen, open on wake"),
     SECURITY("YubiKey", "Lock the Jellyfin sign-in behind security keys"),
     STAY_ON_TOP("Stay on top", "Keep the player in front; show or hide its pin"),
+    ;
+
+    /** False for pages of features left out of this build (-Pmg.no* flags, see the README). */
+    val available: Boolean
+        get() = when (this) {
+            DOWNLOADER -> BuildConfig.FEATURE_DOWNLOADER
+            JELLYFIN, SECURITY -> BuildConfig.FEATURE_JELLYFIN
+            WEB -> BuildConfig.FEATURE_WEB_CONTROL
+            BLUETOOTH -> BuildConfig.FEATURE_BLUETOOTH_CONTROL
+            ARTIST_ART -> BuildConfig.FEATURE_ARTIST_PICTURES
+            // The switches page is only useful with something network-facing in the build.
+            NETWORK -> BuildConfig.FEATURE_JELLYFIN || BuildConfig.FEATURE_WEB_CONTROL ||
+                BuildConfig.FEATURE_BLUETOOTH_CONTROL || BuildConfig.FEATURE_ARTIST_PICTURES
+            else -> true
+        }
 }
 
 /** The top level of Settings. New pages go into one of these (the user names the category). */
@@ -1008,25 +1303,32 @@ enum class SettingsCategory(val title: String, val summary: String, val pages: L
         listOf(SettingsPage.NETWORK, SettingsPage.JELLYFIN, SettingsPage.WEB, SettingsPage.BLUETOOTH),
     ),
     LIBRARY(
-        "Library", "Folders, artist names, artwork",
-        listOf(SettingsPage.LIBRARY, SettingsPage.ARTISTS, SettingsPage.ARTWORK, SettingsPage.ARTIST_ART),
+        "Library", "Folders, artist names, artwork, downloader",
+        listOf(SettingsPage.LIBRARY, SettingsPage.ARTISTS, SettingsPage.ARTWORK, SettingsPage.ARTIST_ART, SettingsPage.DOWNLOADER,
+            SettingsPage.TRACK_INFO,
+        ),
     ),
     SYSTEM(
         "System", "Startup, YubiKey, stay on top",
         listOf(SettingsPage.STARTUP, SettingsPage.SECURITY, SettingsPage.STAY_ON_TOP),
     ),
+    ;
+
+    /** Hidden when every page in it was left out of this build. */
+    val available: Boolean get() = pages.any { it.available }
 }
 
 @Composable
-private fun SettingsPageRow(title: String, summary: String, onClick: () -> Unit) {
+private fun SettingsPageRow(title: String, summary: String, enabled: Boolean = true, onClick: () -> Unit) {
+    val alpha = if (enabled) 1f else 0.4f
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
-        Text(title, style = MaterialTheme.typography.titleMedium)
-        Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha))
+        Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha))
     }
     HorizontalDivider()
 }
