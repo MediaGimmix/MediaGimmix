@@ -163,6 +163,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         NetPolicy.init(app)
+        Equalizer.init(app)
         if (BuildConfig.FEATURE_BLUETOOTH_CONTROL) bluetooth.startIfWanted() // "Start with the app" (Settings → Network → Bluetooth control)
         viewModelScope.launch {
             artistPhotoIds = withContext(Dispatchers.IO) { ArtistImages.downloadedIds(app) }

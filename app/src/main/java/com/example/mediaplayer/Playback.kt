@@ -223,8 +223,15 @@ class Playback(
     }
 
     private val deviceCallback = object : AudioDeviceCallback() {
-        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) = refreshDevices()
-        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) = refreshDevices()
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+            refreshDevices()
+            if (addedDevices.orEmpty().any { it.isSink }) scheduleRouteRebuild()
+        }
+
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+            refreshDevices()
+            if (removedDevices.orEmpty().any { it.isSink }) scheduleRouteRebuild()
+        }
     }
 
     init {
@@ -239,6 +246,21 @@ class Playback(
     fun changeOutputDevice(key: String?) {
         preferredDeviceKey = key
         applyPreferredDevice()
+    }
+
+    /**
+     * An output connected or disconnected (Bluetooth headphones, USB DAC, wired): rebuild the output chain a moment
+     * later, once Android has finished switching. Changing devices under a running stream could leave playback
+     * sped up until the output mode was changed by hand; this does the same rebuild automatically.
+     * Registering the callback reports the devices already there, so the first second after start is ignored.
+     */
+    private val routeRebuild = Runnable { if (nowPlaying != null && !idle) rebuildOutput(outputMode) }
+    private val createdAt = android.os.SystemClock.elapsedRealtime()
+
+    private fun scheduleRouteRebuild() {
+        if (android.os.SystemClock.elapsedRealtime() - createdAt < 1_500) return
+        handler.removeCallbacks(routeRebuild)
+        handler.postDelayed(routeRebuild, ROUTE_SETTLE_MS)
     }
 
     private fun refreshDevices() {
@@ -322,6 +344,14 @@ class Playback(
      */
     fun changeOutputMode(mode: OutputMode) {
         if (mode == outputMode) return
+        rebuildOutput(mode)
+    }
+
+    /**
+     * Throws the player away and builds a fresh one for [mode], keeping the song, position and play state
+     * (the queues live here, not in the player). Also used when an output device connects or disconnects.
+     */
+    private fun rebuildOutput(mode: OutputMode) {
         val song = nowPlaying
         val position = player.currentPosition
         val wasPlaying = player.playWhenReady
@@ -513,6 +543,10 @@ class Playback(
     fun perform(action: ButtonAction) {
         when (action) {
             ButtonAction.NORMAL, ButtonAction.NOTHING -> Unit
+            ButtonAction.EQ_NEXT -> {
+                val name = Equalizer.cycle()
+                android.widget.Toast.makeText(context, "EQ: $name", android.widget.Toast.LENGTH_SHORT).show()
+            }
             ButtonAction.PLAY_PAUSE -> togglePause()
             ButtonAction.PLAY -> resume()
             ButtonAction.PAUSE -> pause()
@@ -650,6 +684,8 @@ class Playback(
 
     companion object {
         const val RESTART_THRESHOLD_MS = 3_000L
+        /** Wait for Android to finish switching outputs (Bluetooth codec setup) before rebuilding. */
+        const val ROUTE_SETTLE_MS = 1_200L
         const val NOTIFICATION_ART_PX = 512
 
         /** The live instance, for the notification buttons ([NotificationActionReceiver]). */

@@ -37,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -48,7 +49,11 @@ private const val PAGE_SIZE = 100
 
 /** Small covers fetched from the player, kept in memory. */
 object RemoteImages {
-    private val cache = LruCache<String, ImageBitmap>(300)
+    /** Limited by bytes, not count (bitmap pixels are native memory outside the Java heap limit). */
+    private val cache = object : LruCache<String, ImageBitmap>(16 * 1024) {
+        override fun sizeOf(key: String, value: ImageBitmap): Int =
+            (value.asAndroidBitmap().allocationByteCount / 1024).coerceAtLeast(1)
+    }
     private val missing = HashSet<String>()
 
     fun peek(key: String): ImageBitmap? = cache.get(key)

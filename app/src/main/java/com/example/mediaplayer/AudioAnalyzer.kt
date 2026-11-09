@@ -293,10 +293,13 @@ class AudioAnalyzer {
 class AnalyzingAudioSink(sink: AudioSink, private val analyzer: AudioAnalyzer) : ForwardingAudioSink(sink) {
     private var lastBuffer: ByteBuffer? = null
     private var lastPts = C.TIME_UNSET
+    /** The parametric EQ, applied in place before the output (and the visualizer) see the samples. */
+    private val eq = EqProcessor()
 
     override fun configure(inputFormat: Format, specifiedBufferSize: Int, outputChannels: IntArray?) {
         super.configure(inputFormat, specifiedBufferSize, outputChannels)
         analyzer.configure(inputFormat)
+        eq.configure(inputFormat.pcmEncoding, inputFormat.channelCount, inputFormat.sampleRate)
     }
 
     override fun handleBuffer(buffer: ByteBuffer, presentationTimeUs: Long, encodedAccessUnitCount: Int): Boolean {
@@ -304,6 +307,7 @@ class AnalyzingAudioSink(sink: AudioSink, private val analyzer: AudioAnalyzer) :
         if (buffer !== lastBuffer || presentationTimeUs != lastPts) {
             lastBuffer = buffer
             lastPts = presentationTimeUs
+            eq.process(buffer)
             analyzer.feed(buffer, presentationTimeUs)
         }
         return super.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
@@ -319,11 +323,13 @@ class AnalyzingAudioSink(sink: AudioSink, private val analyzer: AudioAnalyzer) :
         super.flush()
         lastBuffer = null
         analyzer.reset()
+        eq.reset()
     }
 
     override fun reset() {
         super.reset()
         lastBuffer = null
         analyzer.reset()
+        eq.reset()
     }
 }

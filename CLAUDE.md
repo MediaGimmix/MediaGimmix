@@ -28,7 +28,7 @@ Install with `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
 - `Playback` + `PlayQueue`: ExoPlayer holds only the current song; general queue + play next queue + history;
   MediaSession with a ForwardingPlayer routes hardware next/prev/play to the queue logic
 - Navigation: bottom navbar (`NavBar` in LibraryScreen.kt, below the now playing bar, only in the Library/Queue
-  view): Library, Queue, Search, Settings (assets/icons/nav_*.png) spaced evenly + the Stay on top pin at the end
+  view): Library, Queue, EQ, Search, Settings (assets/icons/nav_*.png) spaced evenly + the Stay on top pin at the end
 - Stay on top (`StayOnTop.kt`, like Pure Music mode; "stay_on_top", default off): MainActivity.onStop -> `bringBack`
   after 400 ms, then re-checks every 1.5 s while hidden, unless asleep/locked. Brings back the app's task with
   `AppTask.moveToFront()`, so a picker running inside the task stays on top (and escaping from it gets pulled back);
@@ -58,8 +58,8 @@ Install with `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
   (max 4 min) has played (`Playback.checkPlayCount`, polled every 2 s)
 - Smart lists in `LibraryViewModel`: most played (top 100), recently added (newest 250), long (> 10 min)
 - Theme: `Theme.kt` (accent #1A6E5C; dark scheme uses lighter `secondary` for highlighted text)
-- Covers: `Artwork.kt` (embedded picture, else cover/folder/front image via `SiblingFiles`; memory + disk
-  cache in cacheDir/art). Custom covers: DB v3 `custom_art` (keys "album:<key>", "playlist:<uri>")
+- Covers: `Artwork.kt` (embedded picture, else cover/folder/front image via `SiblingFiles`; memory cache limited
+  by BYTES (32 MB; bitmap pixels are native memory outside the heap limit) + disk cache in cacheDir/art). Custom covers: DB v3 `custom_art` (keys "album:<key>", "playlist:<uri>")
 - `NowPlayingScreen.kt`: full-screen player, lyrics view, add-to-playlist and delete dialogs
 - `Lyrics.kt`: sidecar .lrc/.txt, else embedded (Media3 MetadataRetriever: ID3 USLT, Vorbis LYRICS, MP4)
 - `PlaylistWriter.kt`: append to .m3u/.m3u8, create .m3u8; needs write permission on the folder tree
@@ -95,11 +95,19 @@ Install with `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
   with Pillow) or else splash.png into generated res `drawable-nodpi/launcher_art.png` (task `copyLauncherArt` in
   each build.gradle.kts); res/mipmap-anydpi-v26/ic_launcher.xml = transparent background + inset art
 - Quick Settings tile "Media" (`MediaTileService`, icon from optional assets/icons/tile_media.png): opens the app and collapses the shade
+- Output route changes: when an output device (sink) is added/removed, `Playback.scheduleRouteRebuild` rebuilds the
+  whole player 1.2 s later (`rebuildOutput`, same as changing the output mode; keeps song/position/state) — fixes
+  playback speeding up after Bluetooth headphones connect
 - Output device: `OutputDevices` (AudioOutput.kt) lists music outputs (speaker, wired, USB, BT, ...), key =
   "type|product|address" so it survives reconnects; stored as "output_device" in "settings". `Playback` tracks devices
   with an AudioDeviceCallback and calls `player.setPreferredAudioDevice` (reaches every sink, incl. through
   AnalyzingAudioSink). `NativeAudioSink.setPreferredDevice` reopens AAudio with `AAudioStreamBuilder_setDeviceId`;
   OpenSL ES can't pick a device
+- Parametric EQ (`Equalizer.kt` state + `EqProcessor`, `EqualizerScreen.kt`; full screen from the navbar EQ icon, assets/icons/nav_eq.png): 3 profiles
+  (2–8 profiles, + Add / Remove; JSON in "settings" "eq"), up to 8 RBJ biquads each (low/high pass, low/high shelf, bell) + preamp. `EqProcessor` runs
+  in place inside `AnalyzingAudioSink.handleBuffer` (first sight of a buffer only), so it covers every output mode but
+  offload; PCM 16/24/32/float LE, float maths, clamped. UI: response graph, dials (drag vertically) for frequency/Q,
+  vertical gain fader, double-tap resets. Button action "Next EQ profile" (`ButtonAction.EQ_NEXT`, toast)
 - Button remapping (`ButtonMapping.kt`): `HwButton` (Vol up/down, Prev, Play/pause incl. HEADSETHOOK/PLAY/PAUSE, Next;
   `column` = side in the UI) and `ButtonAction` (Normal = untouched, the default; play/pause, next, shuffle toggle, volume,
   seek ±10 s, ...). `ButtonMap` saves "button_<name>" in "settings". `Playback.handleKey` is called from

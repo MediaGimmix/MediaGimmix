@@ -48,7 +48,7 @@ Transport buttons (optional; without a file the built-in Material icon is used)
   button_search.png        Search (top bar, left of Settings)
 
 Navigation bar (bottom of the Library/Queue view):
-  nav_library.png, nav_queue.png, nav_search.png, nav_settings.png
+  nav_library.png, nav_queue.png, nav_eq.png (equalizer), nav_search.png, nav_settings.png
   nav_stay_on_top.png      Stay on top pin; recoloured white (on) / black (off), so any one-colour pin works
 
 App icon (both apps): app_icon.png (white outline of the logo on transparent), else splash.png.

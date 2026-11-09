@@ -27,6 +27,9 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Surface
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Home
@@ -90,6 +93,7 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
     // Which album/playlist a custom cover is being picked for ("album:<key>" / "playlist:<uri>").
     var pendingArtKey by rememberSaveable { mutableStateOf<String?>(null) }
     var showSearch by rememberSaveable { mutableStateOf(false) }
+    var showEq by rememberSaveable { mutableStateOf(false) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var searchJellyfin by rememberSaveable { mutableStateOf(false) }
     // An artist/album opened from search: going back returns to the results.
@@ -146,10 +150,11 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
     // Registered first, so the handler below wins whenever there is somewhere to go back to.
     BackHandler(enabled = StayOnTop.on) {}
 
-    BackHandler(enabled = showNowPlaying || showSettings || showSearch || tab == 1 || section != null) {
+    BackHandler(enabled = showNowPlaying || showSettings || showSearch || showEq || tab == 1 || section != null) {
         when {
             showNowPlaying -> showNowPlaying = false
             showSettings -> showSettings = false
+            showEq -> showEq = false
             showSearch -> showSearch = false
             tab == 1 -> tab = 0
             fromSearch -> backToSearch()
@@ -201,6 +206,20 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
                     },
                     onBack = { showSettings = false },
                 )
+            }
+
+            showEq -> Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = { showEq = false }) { Text("← Back") }
+                    Text("Equalizer", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    StayOnTopToggle()
+                }
+                Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                    EqualizerSettings(playback.outputMode)
+                }
             }
 
             showSearch -> Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -255,11 +274,12 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
             )
         }
         // Library / Queue view: the navigation bar at the very bottom.
-        if (!showNowPlaying && !showSettings && !showSearch) {
+        if (!showNowPlaying && !showSettings && !showSearch && !showEq) {
             NavBar(
                 tab = tab,
                 onLibrary = { tab = 0 },
                 onQueue = { tab = 1 },
+                onEq = { showEq = true },
                 onSearch = { showSearch = true },
                 onSettings = { showSettings = true },
             )
@@ -272,12 +292,20 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
  * else Material icons), with the Stay on top pin at the end.
  */
 @Composable
-private fun NavBar(tab: Int, onLibrary: () -> Unit, onQueue: () -> Unit, onSearch: () -> Unit, onSettings: () -> Unit) {
+private fun NavBar(
+    tab: Int,
+    onLibrary: () -> Unit,
+    onQueue: () -> Unit,
+    onEq: () -> Unit,
+    onSearch: () -> Unit,
+    onSettings: () -> Unit,
+) {
     Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
         Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly) {
                 NavIcon(Icons.Filled.Home, "nav_library", "Library", selected = tab == 0, onClick = onLibrary)
                 NavIcon(Icons.AutoMirrored.Filled.List, "nav_queue", "Queue", selected = tab == 1, onClick = onQueue)
+                NavIcon(Icons.Filled.Star, "nav_eq", "Equalizer", selected = false, onClick = onEq)
                 NavIcon(Icons.Filled.Search, "nav_search", "Search", selected = false, onClick = onSearch)
                 NavIcon(Icons.Filled.Settings, "nav_settings", "Settings", selected = false, onClick = onSettings)
             }

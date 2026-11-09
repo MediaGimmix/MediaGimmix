@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -71,7 +72,16 @@ sealed interface ArtSource {
  */
 object Artwork {
 
-    private val memory = LruCache<String, ImageBitmap>(60)
+    /**
+     * Decoded covers in memory, limited by BYTES (not count): bitmap pixels live in native memory, outside the
+     * Java heap limit, so a count-limited cache of big now-playing covers (1000 px = 4 MB each) quietly grew the
+     * process until Android killed other apps and then this one. Evicted covers reload from the disk cache.
+     */
+    private val memory = object : LruCache<String, ImageBitmap>(MEMORY_BUDGET_KB) {
+        override fun sizeOf(key: String, value: ImageBitmap): Int =
+            (value.asAndroidBitmap().allocationByteCount / 1024).coerceAtLeast(1)
+    }
+    private const val MEMORY_BUDGET_KB = 32 * 1024
     private val missing = HashSet<String>()
     private val gate = Semaphore(3)
 

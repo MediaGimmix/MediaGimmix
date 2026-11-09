@@ -48,6 +48,7 @@ enum class ButtonAction(val label: String, val repeats: Boolean = false) {
     VOLUME_DOWN("Volume down", repeats = true),
     SEEK_FORWARD("Forward 10 s", repeats = true),
     SEEK_BACK("Back 10 s", repeats = true),
+    EQ_NEXT("Next EQ profile"),
     NOTHING("Do nothing"),
 }
 
