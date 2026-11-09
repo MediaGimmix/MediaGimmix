@@ -871,6 +871,12 @@ private fun StayOnTopSettings() {
                 "background. Keeps the small Open on wake service running.",
             StayOnTop.on,
         ) { StayOnTop.setOn(context, it) }
+        SwitchRow(
+            "Keep the screen on",
+            "While Stay on top is on, the screen doesn't turn off by itself while the player is in front. " +
+                "The power button still turns it off. Uses more battery.",
+            StayOnTop.keepScreenOn,
+        ) { StayOnTop.setKeepScreenOn(context, it) }
         if (StayOnTop.on && !allowed) {
             Text(
                 "Needs \"Display over other apps\", or Android won't let the app bring itself back.",

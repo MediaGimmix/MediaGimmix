@@ -84,6 +84,9 @@ data class Status(
     val shuffle: Boolean,
     val positionMs: Long,
     val durationMs: Long,
+    /** The player's music volume and its maximum; -1 when the player doesn't report it (older version). */
+    val volume: Int = -1,
+    val volumeMax: Int = -1,
 ) {
     companion object {
         fun from(o: JSONObject) = Status(
@@ -92,6 +95,8 @@ data class Status(
             shuffle = o.optBoolean("shuffle"),
             positionMs = o.optLong("positionMs"),
             durationMs = o.optLong("durationMs"),
+            volume = o.optInt("volume", -1),
+            volumeMax = o.optInt("volumeMax", -1),
         )
     }
 }

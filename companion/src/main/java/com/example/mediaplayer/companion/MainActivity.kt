@@ -3,6 +3,7 @@ package com.example.mediaplayer.companion
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.viewModels
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -48,6 +49,23 @@ private enum class Section(val label: String, val file: String, val icon: ImageV
 }
 
 class MainActivity : ComponentActivity() {
+    /** Same instance the screens get from viewModel(). */
+    private val vm: RemoteViewModel by viewModels()
+
+    /**
+     * The phone's volume keys change the player's volume while this app is open and connected (not while
+     * listening on this phone: then they're the phone's own volume as usual).
+     */
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        val up = event.keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP
+        val down = event.keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN
+        if ((up || down) && !LocalPlayer.active && vm.status != null && vm.error == null) {
+            if (event.action == android.view.KeyEvent.ACTION_DOWN) vm.stepVolume(up)
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -85,8 +103,16 @@ private fun RemoteApp(vm: RemoteViewModel = viewModel()) {
         }
     }
 
+    // The sun toggle: no screen timeout on this phone while the app is open (the power button still works).
+    val activity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
+    LaunchedEffect(vm.keepScreenOn) {
+        val flag = android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        if (vm.keepScreenOn) activity?.window?.addFlags(flag) else activity?.window?.clearFlags(flag)
+    }
+
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-        TabRow(selectedTabIndex = tab) {
+      androidx.compose.foundation.layout.Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+        TabRow(selectedTabIndex = tab, modifier = Modifier.weight(1f)) {
             Section.entries.forEach { s ->
                 val selected = tab == s.ordinal
                 Tab(selected = selected, onClick = { tab = s.ordinal }, modifier = Modifier.height(52.dp)) {
@@ -98,6 +124,8 @@ private fun RemoteApp(vm: RemoteViewModel = viewModel()) {
                 }
             }
         }
+        KeepAwakeToggle(on = vm.keepScreenOn, onChange = { vm.changeKeepScreenOn(it) })
+      }
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             when (Section.entries[tab]) {
                 Section.PLAYER -> PlayerScreen(vm)

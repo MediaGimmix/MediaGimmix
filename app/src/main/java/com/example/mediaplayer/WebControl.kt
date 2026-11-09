@@ -1,6 +1,7 @@
 package com.example.mediaplayer
 
 import android.content.Context
+import android.media.AudioManager
 import android.graphics.Bitmap
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -60,6 +61,7 @@ import org.json.JSONObject
  *        next|prev ?keepPaused=true: move through the queue but stay paused; prev ?force=true: always the
  *        previous song (no restart-if-3-s-in)
  *   POST /api/player/seek?ms=12345         jump within the current song
+ *   POST /api/player/volume?level=N | ?step=up|down   music volume (status has "volume" and "volumeMax")
  *   POST /api/player/shuffle[?on=true|false]   toggle (or set) shuffle
  *   GET  /api/status                        now playing, playing/paused, shuffle, position
  *   POST /api/queue/general/{index}/play?id=   play that general queue song now (the spot moves there; play next
@@ -72,6 +74,7 @@ import org.json.JSONObject
 class WebControl(private val context: Context, private val vm: LibraryViewModel) {
 
     private val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+    private val audio = context.getSystemService(AudioManager::class.java)
 
     var running by mutableStateOf(false)
         private set
@@ -307,6 +310,18 @@ class WebControl(private val context: Context, private val vm: LibraryViewModel)
                             if (keepPaused) p.pause()
                         }
                         "seek" -> p.seekTo(req.query["ms"]?.toLongOrNull()?.coerceAtLeast(0L) ?: return@onMain false)
+                        // Music volume: ?level=0..volumeMax, or ?step=up|down (one notch).
+                        "volume" -> {
+                            val level = req.query["level"]?.toIntOrNull()
+                            when {
+                                level != null -> audio.setStreamVolume(
+                                    AudioManager.STREAM_MUSIC, level.coerceIn(0, audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)), 0,
+                                )
+                                req.query["step"] == "up" -> audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, 0)
+                                req.query["step"] == "down" -> audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, 0)
+                                else -> return@onMain false
+                            }
+                        }
                         "stop" -> p.stop()
                         "shuffle" -> p.changeShuffle(req.query["on"]?.toBooleanStrictOrNull() ?: !p.shuffle)
                         else -> return@onMain false
@@ -423,6 +438,8 @@ class WebControl(private val context: Context, private val vm: LibraryViewModel)
             .put("shuffle", p.shuffle)
             .put("positionMs", p.positionMs())
             .put("durationMs", p.durationMs())
+            .put("volume", audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+            .put("volumeMax", audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC))
     }
 
     /**

@@ -42,6 +42,15 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putInt(KEY_SEARCH_LIMIT, searchLimit).apply()
     }
 
+    /** Keep this phone's screen on while the app is open (the sun toggle). Saved; off by default. */
+    var keepScreenOn by mutableStateOf(prefs.getBoolean(KEY_SCREEN_ON, false))
+        private set
+
+    fun changeKeepScreenOn(on: Boolean) {
+        keepScreenOn = on
+        prefs.edit().putBoolean(KEY_SCREEN_ON, on).apply()
+    }
+
     /** Show what the player is playing as a media notification (no seek bar), see [RemoteService]. */
     var notificationOn by mutableStateOf(prefs.getBoolean(KEY_NOTIFICATION, true))
         private set
@@ -110,6 +119,32 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** play, pause, toggle, next, prev, stop, shuffle */
+    /** Newest level asked for while dragging, and the sender that works through them. */
+    @Volatile private var wantedVolume = -1
+    private var volumeSender: kotlinx.coroutines.Job? = null
+
+    /**
+     * The player's music volume: an exact [level] (0..volumeMax). Called on every step while the slider moves:
+     * one request at a time, and if the level changed meanwhile only the newest one is sent next, so the
+     * volume follows the finger without a backlog (over Bluetooth too).
+     */
+    fun setVolume(level: Int) {
+        wantedVolume = level
+        if (volumeSender?.isActive == true) return
+        volumeSender = viewModelScope.launch {
+            var sent = -1
+            while (wantedVolume != sent) {
+                val target = wantedVolume
+                val result = withContext(Dispatchers.IO) { runCatching { api().command("volume?level=$target") } }
+                sent = target
+                result.onSuccess { apply(it) }.onFailure { error = message(it); return@launch }
+            }
+        }
+    }
+
+    /** The player's music volume one notch up or down (phone volume keys, -/+ buttons). */
+    fun stepVolume(up: Boolean) = command("volume?step=" + if (up) "up" else "down")
+
     fun command(name: String) {
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) { runCatching { api().command(name) } }
@@ -146,6 +181,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         private const val KEY_SEARCH_LIMIT = "search_limit"
         private const val KEY_NOTIFICATION = "notification"
+        private const val KEY_SCREEN_ON = "keep_screen_on"
         const val DEFAULT_SEARCH_LIMIT = 100
         const val MAX_SEARCH_LIMIT = 1000
     }

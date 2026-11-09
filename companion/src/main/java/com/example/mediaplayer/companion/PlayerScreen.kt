@@ -31,6 +31,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 
 /**
  * Now playing on the player, with its buttons. No seek bar while the player plays (on purpose); while
@@ -133,6 +134,8 @@ fun PlayerScreen(vm: RemoteViewModel) {
             }
         }
 
+        VolumeRow(vm, local)
+
         Spacer(Modifier.height(16.dp))
         if (local) {
             Text("Playing on this phone · the player is paused", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
@@ -174,4 +177,85 @@ private fun SeekBar() {
 private fun time(ms: Long): String {
     val total = ms / 1000
     return "%d:%02d".format(total / 60, total % 60)
+}
+
+/**
+ * Volume: the player's music volume (from its status), or this phone's while listening here.
+ * The ends step one notch; the slider changes the volume live as it moves (snapping to whole steps).
+ */
+@Composable
+private fun VolumeRow(vm: RemoteViewModel, local: Boolean) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val audio = androidx.compose.runtime.remember { context.getSystemService(android.media.AudioManager::class.java) }
+    val stream = android.media.AudioManager.STREAM_MUSIC
+    // The phone's volume can change from its own keys: re-read it while listening here.
+    var phoneVolume by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(audio.getStreamVolume(stream)) }
+    androidx.compose.runtime.LaunchedEffect(local) {
+        while (local) {
+            phoneVolume = audio.getStreamVolume(stream)
+            kotlinx.coroutines.delay(500)
+        }
+    }
+    val max = if (local) audio.getStreamMaxVolume(stream) else vm.status?.volumeMax ?: -1
+    val current = if (local) phoneVolume else vm.status?.volume ?: -1
+    if (max <= 0 || current < 0) return // an older player that doesn't report its volume
+
+    var dragging by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<Float?>(null) }
+    val shown = dragging ?: current.toFloat()
+    fun set(level: Int) {
+        if (local) {
+            audio.setStreamVolume(stream, level.coerceIn(0, max), 0)
+            phoneVolume = audio.getStreamVolume(stream)
+        } else {
+            vm.setVolume(level)
+        }
+    }
+    fun step(up: Boolean) {
+        if (local) {
+            audio.adjustStreamVolume(stream, if (up) android.media.AudioManager.ADJUST_RAISE else android.media.AudioManager.ADJUST_LOWER, 0)
+            phoneVolume = audio.getStreamVolume(stream)
+        } else {
+            vm.stepVolume(up)
+        }
+    }
+    Column(modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth().padding(top = 12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = { step(false) }) { VolumeIcon("volume_down", "−", "Volume down") }
+            Slider(
+                value = shown,
+                // Live: every step reached while dragging is applied right away (no jump on release).
+                onValueChange = { v ->
+                    val before = (dragging ?: current.toFloat()).roundToInt()
+                    dragging = v
+                    if (v.roundToInt() != before) set(v.roundToInt())
+                },
+                onValueChangeFinished = {
+                    dragging?.let { set(it.roundToInt()) }
+                    dragging = null
+                },
+                steps = (max - 1).coerceAtLeast(0),
+                valueRange = 0f..max.toFloat(),
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = { step(true) }) { VolumeIcon("volume_up", "+", "Volume up") }
+        }
+        Text(
+            (if (local) "Phone volume " else "Player volume ") + "${shown.roundToInt()} / $max",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+        )
+    }
+}
+
+/** assets/icons/<file>.png (replaceable), else a plain sign. */
+@Composable
+private fun VolumeIcon(file: String, fallback: String, label: String) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val image = androidx.compose.runtime.remember(file) { AssetIcons.load(context.applicationContext, file) }
+    if (image != null) {
+        Image(image, contentDescription = label, modifier = Modifier.size(32.dp))
+    } else {
+        Text(fallback, style = MaterialTheme.typography.titleLarge)
+    }
 }

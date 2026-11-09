@@ -59,6 +59,15 @@ class MainActivity : ComponentActivity() {
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
         }
         setContent {
+            // Stay on top + "Keep the screen on": no screen timeout while the player is in front (power button still works).
+            val keepOn = StayOnTop.on && StayOnTop.keepScreenOn
+            LaunchedEffect(keepOn) {
+                if (keepOn) {
+                    window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                } else {
+                    window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
+            }
             MediaPlayerTheme {
                 // Saved, so rotating the screen doesn't show the splash again.
                 var splashDone by rememberSaveable { mutableStateOf(!SplashConfig.isEnabled(this@MainActivity)) }

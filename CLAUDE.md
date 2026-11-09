@@ -35,7 +35,8 @@ Install with `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
   `allowLeaving()` (before every external launch) only lets a screen in another task stay up to 3 min. Uses the "Display over other apps" permission and keeps `WakeLaunchService` running (`WakeLaunch.syncService`;
   unlock also brings it back). Pin toggle (`StayOnTopToggle`, white on / black off) on the navbar, now playing and
   search, never in Settings; hidden by Settings → System → Stay on top → "Show the pin" ("stay_on_top_switch").
-  Back on the main screen does nothing while it's on
+  Back on the main screen does nothing while it's on. "Keep the screen on" ("stay_on_top_screen_on", default off): while Stay on top
+  is on, MainActivity sets FLAG_KEEP_SCREEN_ON (no timeout; power button still works)
 - No background service for playback on purpose: the target device kills background processes. The one exception is the
   opt-in "Open on wake" `WakeLaunchService` (WakeLaunch.kt): foreground service, ACTION_USER_PRESENT receiver,
   opens the app via the "Display over other apps" permission; restarted at boot and on app start; pref "wake_launch".
@@ -190,4 +191,11 @@ companion/build/outputs/apk/debug/companion-debug.apk` (the JM21 is picked with 
   `RemoteViewModel.apply` while the app is open and the player has a song; platform MediaSession with no duration
   and no ACTION_SEEK_TO; polls /api/status every 3 s; stops when the player stops, after 60 s unreachable, or the ✕
   custom action. Settings switch "Media notification" (prefs "settings" notification, default on)
+- Volume (`VolumeRow` in PlayerScreen.kt): slider + -/+ (assets/icons/volume_down|up.png) on the Player tab. Remote:
+  the player's STREAM_MUSIC from /api/status "volume"/"volumeMax", set with POST /api/player/volume?level=|step=up|down,
+  live while dragging (`RemoteViewModel.setVolume`: one request in flight, only the newest level sent next).
+  While listening on the phone it's the phone's own volume. Phone volume keys -> player volume while the app is open,
+  connected and not listening locally (`MainActivity.dispatchKeyEvent`)
+- Keep screen on (`KeepAwakeToggle`, sun at the right end of the tab bar; prefs "settings" keep_screen_on, default off):
+  this phone's FLAG_KEEP_SCREEN_ON while the app is open. Only the phone; the JM21's own option is under Stay on top
 - Icons: Material paths (`MediaIcons.kt`, copied from the app) overridable by companion/src/main/assets/icons/button_*.png

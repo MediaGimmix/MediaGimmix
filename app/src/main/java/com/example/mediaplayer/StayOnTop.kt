@@ -27,6 +27,7 @@ import androidx.compose.runtime.setValue
 object StayOnTop {
     private const val KEY_ON = "stay_on_top"
     private const val KEY_SWITCH = "stay_on_top_switch"
+    private const val KEY_SCREEN_ON = "stay_on_top_screen_on"
     private const val RETURN_DELAY_MS = 400L
     /** While hidden, how often it checks it's still in front (catches escapes from a picker). */
     private const val WATCH_MS = 1_500L
@@ -36,6 +37,9 @@ object StayOnTop {
     var on by mutableStateOf(false)
         private set
     var showSwitch by mutableStateOf(true)
+        private set
+    /** While staying on top, keep the screen from timing out ("stay_on_top_screen_on", default off). */
+    var keepScreenOn by mutableStateOf(false)
         private set
 
     private val main = Handler(Looper.getMainLooper())
@@ -48,6 +52,7 @@ object StayOnTop {
         val p = prefs(context)
         on = p.getBoolean(KEY_ON, false)
         showSwitch = p.getBoolean(KEY_SWITCH, true)
+        keepScreenOn = p.getBoolean(KEY_SCREEN_ON, false)
         loaded = true
     }
 
@@ -57,6 +62,11 @@ object StayOnTop {
         on = value
         prefs(context).edit().putBoolean(KEY_ON, value).apply()
         WakeLaunch.syncService(context)
+    }
+
+    fun setKeepScreenOn(context: Context, value: Boolean) {
+        keepScreenOn = value
+        prefs(context).edit().putBoolean(KEY_SCREEN_ON, value).apply()
     }
 
     fun setShowSwitch(context: Context, value: Boolean) {
