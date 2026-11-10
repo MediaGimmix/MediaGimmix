@@ -41,7 +41,7 @@ import kotlin.math.ln
 import kotlin.math.exp
 import kotlin.math.roundToInt
 
-/** Settings → Audio → Equalizer. */
+/** The Equalizer tab (navbar Equalizer icon); the bottom navbar stays below it. */
 @Composable
 fun EqualizerSettings(outputMode: OutputMode) {
     val profile = Equalizer.profiles[Equalizer.active]

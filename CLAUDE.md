@@ -27,8 +27,9 @@ Install with `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
 - `PlaylistParser`: .m3u/.m3u8/.pls decoding and entry-to-song matching
 - `Playback` + `PlayQueue`: ExoPlayer holds only the current song; general queue + play next queue + history;
   MediaSession with a ForwardingPlayer routes hardware next/prev/play to the queue logic
-- Navigation: bottom navbar (`NavBar` in LibraryScreen.kt, below the now playing bar, only in the Library/Queue
-  view): Library, Queue, EQ, Search, Settings (assets/icons/nav_*.png) spaced evenly + the Stay on top pin at the end
+- Navigation: bottom navbar (`NavBar` in LibraryScreen.kt, below the now playing bar, only in the Library/Queue/EQ
+  views, tab 0/1/2): Library, Queue, EQ, Search, Settings (assets/icons/nav_*.png) spaced evenly + the Stay on top
+  pin at the end; EQ is a tab like Library/Queue (navbar stays below it, Back returns to Library)
 - Stay on top (`StayOnTop.kt`, like Pure Music mode; "stay_on_top", default off): MainActivity.onStop -> `bringBack`
   after 400 ms, then re-checks every 1.5 s while hidden, unless asleep/locked. Brings back the app's task with
   `AppTask.moveToFront()`, so a picker running inside the task stays on top (and escaping from it gets pulled back);
@@ -103,7 +104,7 @@ Install with `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
   with an AudioDeviceCallback and calls `player.setPreferredAudioDevice` (reaches every sink, incl. through
   AnalyzingAudioSink). `NativeAudioSink.setPreferredDevice` reopens AAudio with `AAudioStreamBuilder_setDeviceId`;
   OpenSL ES can't pick a device
-- Parametric EQ (`Equalizer.kt` state + `EqProcessor`, `EqualizerScreen.kt`; full screen from the navbar EQ icon, assets/icons/nav_eq.png): 3 profiles
+- Parametric EQ (`Equalizer.kt` state + `EqProcessor`, `EqualizerScreen.kt`; its own tab from the navbar EQ icon, assets/icons/nav_eq.png): 3 profiles
   (2–8 profiles, + Add / Remove; JSON in "settings" "eq"), up to 8 RBJ biquads each (low/high pass, low/high shelf, bell) + preamp. `EqProcessor` runs
   in place inside `AnalyzingAudioSink.handleBuffer` (first sight of a buffer only), so it covers every output mode but
   offload; PCM 16/24/32/float LE, float maths, clamped. UI: response graph, dials (drag vertically) for frequency/Q,

@@ -93,7 +93,6 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
     // Which album/playlist a custom cover is being picked for ("album:<key>" / "playlist:<uri>").
     var pendingArtKey by rememberSaveable { mutableStateOf<String?>(null) }
     var showSearch by rememberSaveable { mutableStateOf(false) }
-    var showEq by rememberSaveable { mutableStateOf(false) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var searchJellyfin by rememberSaveable { mutableStateOf(false) }
     // An artist/album opened from search: going back returns to the results.
@@ -150,13 +149,13 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
     // Registered first, so the handler below wins whenever there is somewhere to go back to.
     BackHandler(enabled = StayOnTop.on) {}
 
-    BackHandler(enabled = showNowPlaying || showSettings || showSearch || showEq || tab == 1 || section != null) {
+    // tab: 0 = Library, 1 = Queue, 2 = Equalizer.
+    BackHandler(enabled = showNowPlaying || showSettings || showSearch || tab != 0 || section != null) {
         when {
             showNowPlaying -> showNowPlaying = false
             showSettings -> showSettings = false
-            showEq -> showEq = false
             showSearch -> showSearch = false
-            tab == 1 -> tab = 0
+            tab != 0 -> tab = 0
             fromSearch -> backToSearch()
             openKey != null -> openKey = parentKey(section, openKey!!)
             else -> section = null
@@ -208,20 +207,6 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
                 )
             }
 
-            showEq -> Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    TextButton(onClick = { showEq = false }) { Text("← Back") }
-                    Text("Equalizer", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                    StayOnTopToggle()
-                }
-                Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-                    EqualizerSettings(playback.outputMode)
-                }
-            }
-
             showSearch -> Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 SearchScreen(
                     vm = vm,
@@ -249,10 +234,14 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
 
             else -> {
                 Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    if (tab == 1) {
-                        QueueTab(playback, art = { vm.songArt(it) })
-                    } else {
-                        LibraryContent(
+                    when (tab) {
+                        1 -> QueueTab(playback, art = { vm.songArt(it) })
+
+                        2 -> Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                            EqualizerSettings(playback.outputMode)
+                        }
+
+                        else -> LibraryContent(
                             vm = vm,
                             section = section,
                             openKey = openKey,
@@ -273,13 +262,13 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
                 onOpen = { showNowPlaying = true },
             )
         }
-        // Library / Queue view: the navigation bar at the very bottom.
-        if (!showNowPlaying && !showSettings && !showSearch && !showEq) {
+        // Library / Queue / Equalizer views: the navigation bar at the very bottom.
+        if (!showNowPlaying && !showSettings && !showSearch) {
             NavBar(
                 tab = tab,
                 onLibrary = { tab = 0 },
                 onQueue = { tab = 1 },
-                onEq = { showEq = true },
+                onEq = { tab = 2 },
                 onSearch = { showSearch = true },
                 onSettings = { showSettings = true },
             )
@@ -288,7 +277,7 @@ fun LibraryScreen(vm: LibraryViewModel = viewModel()) {
 }
 
 /**
- * Bottom navigation: Library, Queue, Search, Settings spaced evenly (icons from assets/icons/nav_*.png,
+ * Bottom navigation: Library, Queue, Equalizer, Search, Settings spaced evenly (icons from assets/icons/nav_*.png,
  * else Material icons), with the Stay on top pin at the end.
  */
 @Composable
@@ -305,7 +294,7 @@ private fun NavBar(
             Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly) {
                 NavIcon(Icons.Filled.Home, "nav_library", "Library", selected = tab == 0, onClick = onLibrary)
                 NavIcon(Icons.AutoMirrored.Filled.List, "nav_queue", "Queue", selected = tab == 1, onClick = onQueue)
-                NavIcon(Icons.Filled.Star, "nav_eq", "Equalizer", selected = false, onClick = onEq)
+                NavIcon(Icons.Filled.Star, "nav_eq", "Equalizer", selected = tab == 2, onClick = onEq)
                 NavIcon(Icons.Filled.Search, "nav_search", "Search", selected = false, onClick = onSearch)
                 NavIcon(Icons.Filled.Settings, "nav_settings", "Settings", selected = false, onClick = onSettings)
             }
