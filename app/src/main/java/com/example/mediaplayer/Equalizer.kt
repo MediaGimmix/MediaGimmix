@@ -253,6 +253,10 @@ internal class EqProcessor {
 
     fun reset() { state.forEach { it.fill(0.0) } }
 
+    /** True when [process] would change samples (EQ on, PCM format known). */
+    fun wouldProcess(): Boolean = Equalizer.dsp.on && channels > 0 && rate > 0 && encoding in
+        intArrayOf(C.ENCODING_PCM_16BIT, C.ENCODING_PCM_24BIT, C.ENCODING_PCM_32BIT, C.ENCODING_PCM_FLOAT)
+
     fun process(buffer: ByteBuffer) {
         val d = Equalizer.dsp
         if (!d.on || channels <= 0 || rate <= 0) return

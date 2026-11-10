@@ -307,10 +307,34 @@ class AnalyzingAudioSink(sink: AudioSink, private val analyzer: AudioAnalyzer) :
         if (buffer !== lastBuffer || presentationTimeUs != lastPts) {
             lastBuffer = buffer
             lastPts = presentationTimeUs
-            eq.process(buffer)
-            analyzer.feed(buffer, presentationTimeUs)
+            // Some decoders hand out read-only buffers: the EQ then works on our own copy.
+            copy = if (buffer.isReadOnly && eq.wouldProcess()) copyOf(buffer) else null
+            val target = copy ?: buffer
+            eq.process(target)
+            analyzer.feed(target, presentationTimeUs)
         }
-        return super.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+        val c = copy ?: return super.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+        val before = c.position()
+        val done = super.handleBuffer(c, presentationTimeUs, encodedAccessUnitCount)
+        // Move the decoder's buffer on by what the output took from the copy.
+        buffer.position(buffer.position() + (c.position() - before))
+        return done
+    }
+
+    private var copy: ByteBuffer? = null
+    private var copyStore: ByteBuffer? = null
+
+    private fun copyOf(src: ByteBuffer): ByteBuffer {
+        val n = src.remaining()
+        var store = copyStore
+        if (store == null || store.capacity() < n) {
+            store = ByteBuffer.allocateDirect(n).order(java.nio.ByteOrder.nativeOrder())
+            copyStore = store
+        }
+        store.clear()
+        store.put(src.duplicate())
+        store.flip()
+        return store
     }
 
     override fun getCurrentPositionUs(sourceEnded: Boolean): Long {
@@ -322,6 +346,7 @@ class AnalyzingAudioSink(sink: AudioSink, private val analyzer: AudioAnalyzer) :
     override fun flush() {
         super.flush()
         lastBuffer = null
+        copy = null
         analyzer.reset()
         eq.reset()
     }
@@ -329,6 +354,7 @@ class AnalyzingAudioSink(sink: AudioSink, private val analyzer: AudioAnalyzer) :
     override fun reset() {
         super.reset()
         lastBuffer = null
+        copy = null
         analyzer.reset()
         eq.reset()
     }
