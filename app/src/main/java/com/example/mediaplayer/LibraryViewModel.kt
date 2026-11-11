@@ -129,33 +129,27 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     /** yt-dlp downloads (Settings → Library → Downloader); new tracks trigger a quick scan. */
     val downloader = Downloader(app, viewModelScope) { rescan(full = false) }
 
-    // ---- Jellyfin (a separate library; see Jellyfin.kt)
-    /** Signed-in account (also while locked; its token is never shown). */
-    var jellyfinAccount by mutableStateOf<Jellyfin.Account?>(null)
-        private set
-    /** Signed in, but the token is locked behind a YubiKey (see SecurityKeys.kt). */
-    var jellyfinLocked by mutableStateOf(false)
-        private set
+    // ---- Netshare servers (separate libraries; see Netshare.kt)
+    /** One state per server built into this app (Jellyfin, Navidrome, mStream). */
+    val servers: List<ServerState> = Netshare.builtIn.map { ServerState(it) }
+    fun server(id: String?): ServerState? = servers.firstOrNull { it.id == id }
+    /** The server state a song streams from, or null for files on the phone. */
+    fun serverOf(song: Song): ServerState? = server(song.rootUri)
 
-    /** USB YubiKeys: registering trusted keys and unlocking the Jellyfin token. */
-    val yubikey = YubiKeyUsb(app) { onJellyfinUnlocked() }
-    var jellyfinSongs by mutableStateOf<List<Song>>(emptyList())
+    /** The server picked at the top of the Netshare section (saved as "netshare_server"). */
+    var netshareChoice by mutableStateOf(settings.getString(KEY_NETSHARE_SERVER, null))
         private set
-    var jellyfinPlaylists by mutableStateOf<List<Playlist>>(emptyList())
-        private set
-    var jellyfinAlbums by mutableStateOf<List<AlbumEntry>>(emptyList())
-        private set
-    var jellyfinArtists by mutableStateOf<List<ArtistEntry>>(emptyList())
-        private set
-    var jellyfinSyncedAt by mutableStateOf(0L)
-        private set
-    var jellyfinBusy by mutableStateOf(false)
-        private set
-    /** Progress or the last problem, shown in Settings and the Jellyfin section. */
-    var jellyfinStatus by mutableStateOf("")
-        private set
-    private var jellyfinArtIds: Map<String, String> = emptyMap()
-    private var jellyfinJob: Job? = null
+    /** What the Netshare section shows: the saved pick, else the first signed-in server, else the first. */
+    val currentServer: ServerState?
+        get() = server(netshareChoice) ?: servers.firstOrNull { it.account != null } ?: servers.firstOrNull()
+
+    fun chooseServer(id: String) {
+        netshareChoice = id
+        settings.edit().putString(KEY_NETSHARE_SERVER, id).apply()
+    }
+
+    /** USB YubiKeys: registering trusted keys and unlocking the netshare sign-ins. */
+    val yubikey = YubiKeyUsb(app) { onVaultUnlocked() }
 
     private var scanJob: Job? = null
     private var rebuildJob: Job? = null
@@ -178,7 +172,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
             }
             reload()
             loading = false
-            if (BuildConfig.FEATURE_JELLYFIN) loadJellyfin()
+            servers.forEach { loadServer(it) }
             // Only scan on startup if folders exist but nothing has ever been stored.
             if (neverScanned) rescan(full = false)
         }
@@ -301,7 +295,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
             artistFetchStatus = "Internet access is off"
             return
         }
-        val names = (artists + jellyfinArtists).map { it.name }
+        val names = (artists + servers.flatMap { it.artists }).map { it.name }
         if (names.isEmpty()) return
         val app = getApplication<Application>()
         artistFetch = viewModelScope.launch {
@@ -372,43 +366,41 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         LibraryGrouping.albumKey(song)?.let { customArt["album:$it"] }?.let { ArtSource.FromImage(it) }
             ?: ownArt(song)
 
-    /** A song's own cover: from the file, or for Jellyfin songs the server's album image. */
+    /** A song's own cover: from the file, or for server songs the server's album image. */
     private fun ownArt(song: Song): ArtSource =
-        if (Jellyfin.isJellyfin(song)) {
-            jellyfinArtIds[song.uri.toString()]?.let { ArtSource.FromJellyfin(it) } ?: ArtSource.FromSong(song)
-        } else {
-            ArtSource.FromSong(song)
-        }
+        serverOf(song)?.let { st -> st.artIds[song.uri.toString()]?.let { ArtSource.FromServer(st.id, it) } }
+            ?: ArtSource.FromSong(song)
 
-    // ---- Jellyfin -----------------------------------------------------------------
+    // ---- Netshare servers ---------------------------------------------------------
 
-    private fun loadJellyfin() {
+    private fun loadServer(st: ServerState) {
+        val b = st.backend
         viewModelScope.launch {
             val app = getApplication<Application>()
             val lib = withContext(Dispatchers.IO) {
-                Jellyfin.init(app)
-                Jellyfin.loadCached(app)
+                b.init(app)
+                b.loadCached(app)
             }
-            jellyfinAccount = Jellyfin.signedIn
-            jellyfinLocked = Jellyfin.isLocked()
+            st.account = b.shown
+            st.locked = b.isLocked()
             yubikey.refresh() // watches USB for a trusted key while locked
-            if (lib != null) applyJellyfin(lib)
+            if (lib != null) applyServer(st, lib)
             // Refresh in the background when signed in and the copy is missing or over 12 hours old.
-            if (Jellyfin.account != null && (lib == null || System.currentTimeMillis() - lib.syncedAt > JELLYFIN_STALE_MS)) {
-                syncJellyfin()
-            }
+            if (b.ready && (lib == null || System.currentTimeMillis() - lib.syncedAt > NETSHARE_STALE_MS)) syncServer(st)
         }
     }
 
-    /** A trusted YubiKey unlocked the vault: start Jellyfin. */
-    private fun onJellyfinUnlocked() {
-        if (!Jellyfin.unlock()) return
-        jellyfinLocked = false
-        if (jellyfinStatus.startsWith("Signed in for now")) jellyfinStatus = ""
-        viewModelScope.launch {
-            val lib = withContext(Dispatchers.IO) { Jellyfin.loadCached(getApplication()) }
-            if (lib != null) applyJellyfin(lib)
-            if (lib == null || System.currentTimeMillis() - lib.syncedAt > JELLYFIN_STALE_MS) syncJellyfin()
+    /** A trusted YubiKey unlocked the vault: start the signed-in servers. */
+    private fun onVaultUnlocked() {
+        for (st in servers) {
+            if (!st.backend.unlock()) continue
+            st.locked = false
+            if (st.status == Netshare.SIGNED_IN_FOR_NOW) st.status = ""
+            viewModelScope.launch {
+                val lib = withContext(Dispatchers.IO) { st.backend.loadCached(getApplication()) }
+                if (lib != null) applyServer(st, lib)
+                if (lib == null || System.currentTimeMillis() - lib.syncedAt > NETSHARE_STALE_MS) syncServer(st)
+            }
         }
     }
 
@@ -416,97 +408,90 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     fun detrustKey(id: String) {
         val error = TokenVault.removeKey(id)
         if (error != null) toast(error)
-        // No keys left: the token is plain again; make sure Jellyfin runs.
-        if (!TokenVault.isProtected && jellyfinLocked) onJellyfinUnlocked()
+        // No keys left: the secrets are plain again; make sure the servers run.
+        if (!TokenVault.isProtected && servers.any { it.locked }) onVaultUnlocked()
         yubikey.refresh()
     }
 
-    /** "Lock now": forget the Jellyfin token until a trusted YubiKey is plugged in again. */
-    fun lockJellyfin() {
-        jellyfinJob?.cancel()
-        jellyfinBusy = false
-        Jellyfin.lock()
-        jellyfinLocked = Jellyfin.isLocked()
-        if (jellyfinLocked) applyJellyfin(Jellyfin.Library(emptyList(), emptyList(), emptyMap(), 0L))
+    /** "Lock now": forget the netshare sign-ins until a trusted YubiKey is plugged in again. */
+    fun lockServers() {
+        for (st in servers) {
+            st.job?.cancel()
+            st.busy = false
+            st.backend.lock()
+            st.locked = st.backend.isLocked()
+            if (st.locked) applyServer(st, ServerLibrary.EMPTY)
+        }
         yubikey.refresh()
     }
 
-    fun jellyfinLastServer(): String = Jellyfin.lastServer(getApplication())
+    fun lastServer(st: ServerState): String = st.backend.lastServer(getApplication())
 
-    fun signInJellyfin(server: String, user: String, password: String) {
-        if (jellyfinBusy) return
-        jellyfinBusy = true
-        jellyfinStatus = "Signing in..."
+    fun signIn(st: ServerState, values: Map<String, String>) {
+        if (st.busy) return
+        st.busy = true
+        st.status = "Signing in..."
         viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching { Jellyfin.signIn(getApplication(), server, user, password) }
-            }
-            jellyfinBusy = false
+            val result = withContext(Dispatchers.IO) { runCatching { st.backend.signIn(getApplication(), values) } }
+            st.busy = false
             result.onSuccess {
-                jellyfinAccount = Jellyfin.signedIn
-                jellyfinLocked = false
-                jellyfinStatus = if (TokenVault.isLocked()) {
-                    "Signed in for now. Plug in a trusted YubiKey to keep this sign-in after the app closes."
-                } else {
-                    ""
-                }
+                st.account = st.backend.shown
+                st.locked = false
+                st.status = if (TokenVault.isLocked()) Netshare.SIGNED_IN_FOR_NOW else ""
                 yubikey.refresh()
-                syncJellyfin()
-            }.onFailure { jellyfinStatus = it.message ?: "Sign-in failed" }
+                syncServer(st)
+            }.onFailure { st.status = it.message ?: "Sign-in failed" }
         }
     }
 
-    fun signOutJellyfin() {
-        jellyfinJob?.cancel()
+    fun signOut(st: ServerState) {
+        st.job?.cancel()
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { Jellyfin.signOut(getApplication()) }
-            jellyfinAccount = null
-            jellyfinLocked = false
+            withContext(Dispatchers.IO) { st.backend.signOut(getApplication()) }
+            st.account = null
+            st.locked = false
             yubikey.refresh()
-            jellyfinBusy = false
-            jellyfinStatus = ""
-            applyJellyfin(Jellyfin.Library(emptyList(), emptyList(), emptyMap(), 0L))
+            st.busy = false
+            st.status = ""
+            applyServer(st, ServerLibrary.EMPTY)
         }
     }
 
-    fun syncJellyfin() {
-        val acc = Jellyfin.account ?: return
-        if (jellyfinJob?.isActive == true) return
-        jellyfinBusy = true
-        jellyfinStatus = "Connecting to ${acc.serverName}..."
-        jellyfinJob = viewModelScope.launch {
+    fun syncServer(st: ServerState) {
+        if (!st.backend.ready || st.job?.isActive == true) return
+        st.busy = true
+        st.status = "Connecting to ${st.account?.serverName ?: st.label}..."
+        st.job = viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    Jellyfin.sync(getApplication(), acc) { msg -> viewModelScope.launch { jellyfinStatus = msg } }
-                }
+                runCatching { st.backend.sync(getApplication()) { msg -> viewModelScope.launch { st.status = msg } } }
             }
-            jellyfinBusy = false
+            st.busy = false
             result.onSuccess {
-                applyJellyfin(it)
-                jellyfinStatus = ""
-            }.onFailure { jellyfinStatus = "Sync failed: ${it.message ?: it.javaClass.simpleName}" }
+                applyServer(st, it)
+                st.status = ""
+            }.onFailure { st.status = "Sync failed: ${it.message ?: it.javaClass.simpleName}" }
         }
     }
 
-    private fun applyJellyfin(lib: Jellyfin.Library) {
-        jellyfinArtIds = lib.artIds
-        jellyfinSongs = lib.songs
-        jellyfinPlaylists = lib.playlists
-        jellyfinSyncedAt = lib.syncedAt
-        rebuildJellyfinIndex()
+    private fun applyServer(st: ServerState, lib: ServerLibrary) {
+        st.artIds = lib.artIds
+        st.songs = lib.songs
+        st.playlists = lib.playlists
+        st.syncedAt = lib.syncedAt
+        rebuildServerIndex(st)
     }
 
-    /** Albums and artists for the Jellyfin section, with the same artist splitting as local songs. */
-    private fun rebuildJellyfinIndex() {
-        val s = jellyfinSongs
+    /** Albums and artists for a server's section, with the same artist splitting as local songs. */
+    private fun rebuildServerIndex(st: ServerState) {
+        val s = st.songs
         val splitter = ArtistSplitter(delimiters, whitelist)
         viewModelScope.launch {
             val (al, ar) = withContext(Dispatchers.Default) {
                 LibraryGrouping.albums(s) to LibraryGrouping.artists(s, splitter)
             }
-            if (s === jellyfinSongs) {
-                jellyfinAlbums = al
-                jellyfinArtists = ar
+            if (s === st.songs) {
+                st.albums = al
+                st.artists = ar
                 fetchArtistPictures() // new names to look up (does nothing off Wi-Fi)
             }
         }
@@ -534,8 +519,8 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         get() = playlists.filterNot { it.uri.toString().endsWith(".pls", ignoreCase = true) }
 
     fun addToPlaylist(song: Song, playlist: Playlist) {
-        if (Jellyfin.isJellyfin(song)) {
-            toast("Not available for Jellyfin songs")
+        if (Netshare.isServerSong(song)) {
+            toast("Not available for server songs")
             return
         }
         viewModelScope.launch {
@@ -557,8 +542,8 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Creates a new .m3u8 playlist in the song's media folder, starting with [first]. */
     fun createPlaylist(name: String, first: Song) {
-        if (Jellyfin.isJellyfin(first)) {
-            toast("Not available for Jellyfin songs")
+        if (Netshare.isServerSong(first)) {
+            toast("Not available for server songs")
             return
         }
         val clean = name.replace(Regex("""[\\/:*?"<>|]"""), "").trim()
@@ -583,8 +568,8 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Deletes the song's file from the device and removes it everywhere in the app. */
     fun deleteSong(song: Song) {
-        if (Jellyfin.isJellyfin(song)) {
-            toast("Not available for Jellyfin songs")
+        if (Netshare.isServerSong(song)) {
+            toast("Not available for server songs")
             return
         }
         viewModelScope.launch {
@@ -773,7 +758,7 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Recomputes albums, artists, smart lists and stats in the background; a newer request cancels an older one. */
     private fun rebuildDerived() {
-        rebuildJellyfinIndex() // artist splitting applies to Jellyfin too
+        servers.forEach { rebuildServerIndex(it) } // artist splitting applies to server libraries too
         val s = songs
         val p = playlists
         val counts = playStats
@@ -837,7 +822,8 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     companion object {
-        private const val JELLYFIN_STALE_MS = 12 * 60 * 60 * 1000L
+        private const val KEY_NETSHARE_SERVER = "netshare_server"
+        private const val NETSHARE_STALE_MS = 12 * 60 * 60 * 1000L
         const val MOST_PLAYED_LIMIT = 100
         const val RECENTLY_ADDED_LIMIT = 250
         const val LONG_SONG_MS = 10 * 60_000L

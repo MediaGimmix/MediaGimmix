@@ -63,7 +63,7 @@ class YubiKeyUsb(context: Context, private val onUnlocked: () -> Unit) {
         }
         prompt = when (op) {
             is Op.Register -> "Plug in the YubiKey to register"
-            Op.Unlock -> if (TokenVault.isLocked()) "Jellyfin is locked: plug in a trusted YubiKey" else null
+            Op.Unlock -> if (TokenVault.isLocked()) "Netshare is locked: plug in a trusted YubiKey" else null
             null -> null
         }
     }

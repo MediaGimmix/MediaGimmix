@@ -289,7 +289,7 @@ class Playback(
                 return sink?.let { AnalyzingAudioSink(it, analyzer) }
             }
         }.setEnableAudioFloatOutput(mode == OutputMode.HI_RES)
-        // Streams from the Jellyfin server get its Authorization header; local content:// URIs pass straight through.
+        // Streams from the netshare servers get their credentials; local content:// URIs pass straight through.
         val dataSources = ResolvingDataSource.Factory(
             DefaultDataSource.Factory(
                 context,
@@ -301,7 +301,7 @@ class Playback(
             ),
         ) { spec ->
             NetPolicy.check(spec.uri) // Settings → Network (runs on the loading thread)
-            Jellyfin.authorize(spec)
+            Netshare.authorize(spec) // each server only touches its own streams
         }
         val p = ExoPlayer.Builder(context, renderers)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSources))

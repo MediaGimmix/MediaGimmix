@@ -28,8 +28,8 @@ import org.json.JSONObject
  *
  * Runs only while the app is alive (the player lives in the app, too).
  *
- * API (JSON; add ?source=jellyfin to library calls for the Jellyfin library,
- * default is songs on the phone; ids = first 16 hex of SHA-1 of the song uri,
+ * API (JSON; add ?source=jellyfin, ?source=navidrome or ?source=mstream to library calls for that server's
+ * library, default is songs on the phone; ids = first 16 hex of SHA-1 of the song uri,
  * "album:<key>" or "artist:<key>"):
  *
  *   Lists are capped at the "Most items per reply" setting (main app, Settings → Network → Web control);
@@ -190,16 +190,16 @@ class WebControl(private val context: Context, private val vm: LibraryViewModel)
     private fun api(req: WebServer.Request): WebServer.Response {
         val s = req.segments.drop(1) // after "api"
         val post = req.method == "POST"
-        val jelly = req.query["source"] == "jellyfin"
+        val source = req.query["source"].orEmpty() // a netshare server id, or "" (songs on the phone)
         return when {
             // ---- library (every list is capped at the main app's limit; X-Total-Count = full size)
-            s == listOf("artists") -> list(req, onMain { lib(jelly).artists }) { artistJson(it) }
-            s == listOf("albums") -> list(req, onMain { lib(jelly).albums }) { albumJson(it) }
-            s == listOf("songs") -> list(req, onMain { lib(jelly).songs }) { songJson(it) }
-            s == listOf("playlists") -> list(req, onMain { lib(jelly).playlists }) { playlistJson(it) }
+            s == listOf("artists") -> list(req, onMain { lib(source).artists }) { artistJson(it) }
+            s == listOf("albums") -> list(req, onMain { lib(source).albums }) { albumJson(it) }
+            s == listOf("songs") -> list(req, onMain { lib(source).songs }) { songJson(it) }
+            s == listOf("playlists") -> list(req, onMain { lib(source).playlists }) { playlistJson(it) }
             s.size == 3 && s[0] == "artists" && s[2] == "albums" -> {
                 val albums = onMain {
-                    val l = lib(jelly)
+                    val l = lib(source)
                     val artist = findArtist(l, s[1]) ?: return@onMain null
                     val uris = artist.songs.mapTo(HashSet()) { it.uri }
                     l.albums.filter { a -> a.songs.any { it.uri in uris } }
@@ -207,13 +207,13 @@ class WebControl(private val context: Context, private val vm: LibraryViewModel)
                 list(req, albums) { albumJson(it) }
             }
             s.size == 3 && s[0] == "artists" && s[2] == "songs" ->
-                onMain { findArtist(lib(jelly), s[1])?.songs }?.let { songs -> list(req, songs) { songJson(it) } }
+                onMain { findArtist(lib(source), s[1])?.songs }?.let { songs -> list(req, songs) { songJson(it) } }
                     ?: error(404, "No such artist")
             s.size == 3 && s[0] == "albums" && s[2] == "songs" ->
-                onMain { findAlbum(lib(jelly), s[1])?.songs }?.let { songs -> list(req, songs) { songJson(it) } }
+                onMain { findAlbum(lib(source), s[1])?.songs }?.let { songs -> list(req, songs) { songJson(it) } }
                     ?: error(404, "No such album")
             s.size == 3 && s[0] == "playlists" && s[2] == "songs" ->
-                onMain { findPlaylist(lib(jelly), s[1])?.songs }?.let { songs -> list(req, songs) { songJson(it) } }
+                onMain { findPlaylist(lib(source), s[1])?.songs }?.let { songs -> list(req, songs) { songJson(it) } }
                     ?: error(404, "No such playlist")
 
             // ---- play a whole album / artist / playlist (POST, ?shuffle=true)
@@ -221,7 +221,7 @@ class WebControl(private val context: Context, private val vm: LibraryViewModel)
                 if (!post) return error(405, "Use POST")
                 val shuffled = req.query["shuffle"]?.toBooleanStrictOrNull() ?: false
                 val played = onMain {
-                    val l = lib(jelly)
+                    val l = lib(source)
                     val songs = when (s[0]) {
                         "albums" -> findAlbum(l, s[1])?.songs
                         "artists" -> findArtist(l, s[1])?.songs
@@ -239,7 +239,7 @@ class WebControl(private val context: Context, private val vm: LibraryViewModel)
                 val q = req.query["q"]?.trim().orEmpty()
                 if (q.isEmpty()) return error(400, "Missing ?q=")
                 val limit = (req.query["limit"]?.toIntOrNull() ?: DEFAULT_SEARCH_LIMIT).coerceIn(1, listLimit)
-                val l = onMain { lib(jelly) }
+                val l = onMain { lib(source) }
                 when (s.getOrNull(1)) {
                     null -> {
                         val r = LibrarySearch.all(q, l.songs, l.albums, l.artists, limit)
@@ -260,15 +260,15 @@ class WebControl(private val context: Context, private val vm: LibraryViewModel)
 
             // ---- art and downloads
             s.size == 3 && s[0] == "albums" && s[2] == "art" -> {
-                val source = onMain { lib(jelly).albums.firstOrNull { id("album:" + it.key) == s[1] }?.let { vm.albumArt(it) } }
+                val source = onMain { lib(source).albums.firstOrNull { id("album:" + it.key) == s[1] }?.let { vm.albumArt(it) } }
                 art(source, req)
             }
             s.size == 3 && s[0] == "artists" && s[2] == "art" -> {
-                val source = onMain { lib(jelly).artists.firstOrNull { id("artist:" + it.key) == s[1] }?.let { vm.artistArt(it) } }
+                val source = onMain { lib(source).artists.firstOrNull { id("artist:" + it.key) == s[1] }?.let { vm.artistArt(it) } }
                 art(source, req)
             }
             s.size == 3 && s[0] == "playlists" && s[2] == "art" ->
-                art(onMain { findPlaylist(lib(jelly), s[1])?.let { vm.playlistArt(it) } }, req)
+                art(onMain { findPlaylist(lib(source), s[1])?.let { vm.playlistArt(it) } }, req)
             s.size == 3 && s[0] == "songs" && s[2] == "art" -> art(onMain { findSong(s[1])?.let { vm.songArt(it) } }, req)
             s.size == 3 && s[0] == "songs" && s[2] == "download" -> download(onMain { findSong(s[1]) })
 
@@ -277,7 +277,7 @@ class WebControl(private val context: Context, private val vm: LibraryViewModel)
                 if (!post) return error(405, "Use POST")
                 val played = onMain {
                     val song = findSong(s[1]) ?: return@onMain false
-                    val l = lib(Jellyfin.isJellyfin(song))
+                    val l = lib(sourceOf(song))
                     // Same as tapping the song in that list: ?playlist=, ?artist= or ?album= (default: its own
                     // album, or Songs if it's on no album).
                     val context = req.query["playlist"]?.let { findPlaylist(l, it)?.songs }
@@ -366,12 +366,12 @@ class WebControl(private val context: Context, private val vm: LibraryViewModel)
         val playlists: List<Playlist>,
     )
 
-    private fun lib(jellyfin: Boolean) =
-        if (jellyfin) {
-            Lib(vm.jellyfinSongs, vm.jellyfinAlbums, vm.jellyfinArtists, vm.jellyfinPlaylists)
-        } else {
-            Lib(vm.songs, vm.albums, vm.artists, vm.playlists)
-        }
+    private fun lib(source: String): Lib =
+        vm.server(source)?.let { Lib(it.songs, it.albums, it.artists, it.playlists) }
+            ?: Lib(vm.songs, vm.albums, vm.artists, vm.playlists)
+
+    /** The ?source= value of a song: "local" or its server's id. */
+    private fun sourceOf(song: Song): String = Netshare.of(song)?.id ?: "local"
 
     private fun findAlbum(l: Lib, albumId: String) = l.albums.firstOrNull { id("album:" + it.key) == albumId }
     private fun findArtist(l: Lib, artistId: String) = l.artists.firstOrNull { id("artist:" + it.key) == artistId }
@@ -394,7 +394,8 @@ class WebControl(private val context: Context, private val vm: LibraryViewModel)
     }
 
     private fun findSong(songId: String): Song? =
-        vm.songs.firstOrNull { id(it.uri.toString()) == songId } ?: vm.jellyfinSongs.firstOrNull { id(it.uri.toString()) == songId }
+        vm.songs.firstOrNull { id(it.uri.toString()) == songId }
+            ?: vm.servers.firstNotNullOfOrNull { st -> st.songs.firstOrNull { id(it.uri.toString()) == songId } }
 
     private fun songJson(s: Song) = JSONObject()
         .put("id", id(s.uri.toString()))
@@ -406,8 +407,8 @@ class WebControl(private val context: Context, private val vm: LibraryViewModel)
         .put("disc", s.discNumber)
         .put("year", s.year)
         .put("durationMs", s.durationMs)
-        .put("sizeBytes", s.sizeBytes) // 0 = unknown (Jellyfin)
-        .put("source", if (Jellyfin.isJellyfin(s)) "jellyfin" else "local")
+        .put("sizeBytes", s.sizeBytes) // 0 = unknown (some servers)
+        .put("source", sourceOf(s))
         .put("albumId", LibraryGrouping.albumKey(s)?.let { id("album:$it") } ?: JSONObject.NULL)
 
     private fun albumJson(a: AlbumEntry) = JSONObject()
@@ -422,7 +423,7 @@ class WebControl(private val context: Context, private val vm: LibraryViewModel)
         .put("name", p.name)
         .put("songCount", p.songs.size)
         .put("missing", p.missing)
-        .put("source", if (p.rootUri == Jellyfin.ROOT) "jellyfin" else "local")
+        .put("source", Netshare.byId(p.rootUri)?.id ?: "local")
 
     private fun artistJson(a: ArtistEntry) = JSONObject()
         .put("id", id("artist:" + a.key))
@@ -475,12 +476,14 @@ class WebControl(private val context: Context, private val vm: LibraryViewModel)
 
     private fun download(song: Song?): WebServer.Response {
         song ?: return error(404, "No such song")
-        val (stream, length) = if (Jellyfin.isJellyfin(song)) {
-            Jellyfin.openStream(song) ?: return error(502, "Jellyfin server didn't send the file")
-        } else {
-            val s = runCatching { context.contentResolver.openInputStream(song.uri) }.getOrNull()
-                ?: return error(404, "File not readable")
-            s to (song.sizeBytes.takeIf { it > 0 } ?: -1L)
+        val server = Netshare.of(song)
+        val (stream, length) = when {
+            server != null -> server.openStream(song) ?: return error(502, "${server.label} server didn't send the file")
+            else -> {
+                val s = runCatching { context.contentResolver.openInputStream(song.uri) }.getOrNull()
+                    ?: return error(404, "File not readable")
+                s to (song.sizeBytes.takeIf { it > 0 } ?: -1L)
+            }
         }
         val name = URLEncoder.encode(song.fileName, "UTF-8").replace("+", "%20")
         return WebServer.Response(

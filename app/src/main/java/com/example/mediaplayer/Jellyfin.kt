@@ -27,8 +27,17 @@ import org.json.JSONObject
  * queue, play counts, artist splitting and the visualizer treat them like local
  * files. The library is cached in filesDir/[CACHE_FILE] between syncs.
  */
-object Jellyfin {
+object Jellyfin : NetshareBackend {
     const val ROOT = "jellyfin"
+    override val id = ROOT
+    override val label = "Jellyfin"
+    override val builtIn get() = BuildConfig.FEATURE_JELLYFIN
+    override val fields = listOf(
+        SignInField("server", "Server address", "192.168.1.10:8096"),
+        SignInField("user", "User name"),
+        SignInField("password", "Password", secret = true, optional = true),
+    )
+    override val keeps = "the access token"
     private const val PREFS = "jellyfin"
     private const val CACHE_FILE = "jellyfin_library.json"
     private const val PAGE = 1000
@@ -41,14 +50,6 @@ object Jellyfin {
         val token: String,
     )
 
-    /** A synced library. [artIds] maps a song URI to the item whose Primary image is its cover. */
-    data class Library(
-        val songs: List<Song>,
-        val playlists: List<Playlist>,
-        val artIds: Map<String, String>,
-        val syncedAt: Long,
-    )
-
     /** The signed-in account, read by the stream, cover and lyrics code on any thread. Null while locked. */
     @Volatile var account: Account? = null
         private set
@@ -57,6 +58,9 @@ object Jellyfin {
     @Volatile var signedIn: Account? = null
         private set
 
+    override val shown: ServerAccount? get() = signedIn?.let { ServerAccount(it.server, it.serverName, it.userName) }
+    override val ready: Boolean get() = account != null
+
     private var deviceId: String = ""
 
     fun isJellyfin(song: Song): Boolean = song.rootUri == ROOT
@@ -64,7 +68,7 @@ object Jellyfin {
     // ---- account ------------------------------------------------------------
 
     /** Loads the saved account (call once at startup). */
-    fun init(context: Context) {
+    override fun init(context: Context) {
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         deviceId = p.getString("device_id", null) ?: UUID.randomUUID().toString().also {
             p.edit().putString("device_id", it).apply()
@@ -82,34 +86,32 @@ object Jellyfin {
         }
         signedIn = known
         // A locked vault leaves the token null: Jellyfin waits for a trusted YubiKey.
-        account = TokenVault.readToken()?.let { t -> known?.copy(token = t) }
+        account = TokenVault.readToken(ROOT)?.let { t -> known?.copy(token = t) }
     }
 
     /** True when signed in but the token is locked behind a YubiKey. */
-    fun isLocked(): Boolean = signedIn != null && account == null
+    override fun isLocked(): Boolean = signedIn != null && account == null
 
     /** After a trusted YubiKey unlocked the vault. Returns false if there's still no token. */
-    fun unlock(): Boolean {
-        val token = TokenVault.readToken() ?: return false
+    override fun unlock(): Boolean {
+        val token = TokenVault.readToken(ROOT) ?: return false
         account = signedIn?.copy(token = token) ?: return false
         return true
     }
 
     /** "Lock now": forget the token in memory until a trusted key is plugged in again. */
-    fun lock() {
+    override fun lock() {
         TokenVault.lock()
         if (TokenVault.isLocked()) account = null
     }
 
-    /** "192.168.1.5:8096" -> "http://192.168.1.5:8096"; trailing slashes dropped. */
-    fun normalizeServer(input: String): String {
-        val t = input.trim().trimEnd('/')
-        return if (t.startsWith("http://", true) || t.startsWith("https://", true)) t else "http://$t"
+    override fun signIn(context: Context, values: Map<String, String>) {
+        signIn(context, values["server"].orEmpty(), values["user"].orEmpty(), values["password"].orEmpty())
     }
 
     /** Signs in (blocking; call off the main thread). Throws IOException with a readable message. */
     fun signIn(context: Context, serverInput: String, userName: String, password: String): Account {
-        val server = normalizeServer(serverInput)
+        val server = Netshare.normalizeServer(serverInput)
         val info = try {
             JSONObject(request("GET", "$server/System/Info/Public", token = null))
         } catch (e: IOException) {
@@ -138,31 +140,32 @@ object Jellyfin {
             .putString("user_name", acc.userName)
             .apply()
         // Plain, or encrypted when YubiKeys protect it (held in memory until one unlocks, if locked).
-        TokenVault.writeToken(acc.token)
+        TokenVault.writeToken(acc.token, ROOT)
         signedIn = acc.copy(token = "")
         account = acc
         return acc
     }
 
     /** Signs out: ends the session on the server (best effort) and forgets the token and cached library. */
-    fun signOut(context: Context) {
+    override fun signOut(context: Context) {
         account?.let { acc -> runCatching { request("POST", "${acc.server}/Sessions/Logout", acc.token) } }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .remove("server_name").remove("user_id").remove("user_name").remove("token")
             .apply() // the server address stays, to make signing in again easier
-        TokenVault.deleteToken()
+        TokenVault.deleteToken(ROOT)
         File(context.filesDir, CACHE_FILE).delete()
         account = null
         signedIn = null
     }
 
-    fun lastServer(context: Context): String =
+    override fun lastServer(context: Context): String =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("server", "").orEmpty()
 
     // ---- library ------------------------------------------------------------
 
     /** Fetches every song and playlist (blocking). [onProgress] gets a status line. */
-    fun sync(context: Context, acc: Account, onProgress: (String) -> Unit): Library {
+    override fun sync(context: Context, onProgress: (String) -> Unit): ServerLibrary {
+        val acc = account ?: throw IOException("Not signed in")
         val items = JSONArray()
         var start = 0
         while (true) {
@@ -208,7 +211,7 @@ object Jellyfin {
     }
 
     /** The library from the last sync, if it belongs to the signed-in server. */
-    fun loadCached(context: Context): Library? {
+    override fun loadCached(context: Context): ServerLibrary? {
         val acc = account ?: return null
         val file = File(context.filesDir, CACHE_FILE)
         if (!file.exists()) return null
@@ -218,7 +221,7 @@ object Jellyfin {
         }.getOrNull()
     }
 
-    private fun parse(json: JSONObject): Library {
+    private fun parse(json: JSONObject): ServerLibrary {
         val server = json.getString("server")
         val items = json.getJSONArray("items")
         val songs = ArrayList<Song>(items.length())
@@ -251,7 +254,7 @@ object Jellyfin {
                 missing = ids.length() - list.size,
             )
         }.sortedBy { it.name.lowercase() }
-        return Library(songs, playlists, artIds, json.optLong("syncedAt"))
+        return ServerLibrary(songs, playlists, artIds, json.optLong("syncedAt"))
     }
 
     private fun toSong(server: String, o: JSONObject): Song {
@@ -287,6 +290,8 @@ object Jellyfin {
 
     // ---- covers, lyrics, streams ------------------------------------------------
 
+    override fun cover(artId: String, sizePx: Int): ByteArray? = imageUrl(artId, sizePx)?.let { download(it) }
+
     fun imageUrl(itemId: String, sizePx: Int): String? {
         val acc = account ?: return null
         return "${acc.server}/Items/$itemId/Images/Primary?maxWidth=$sizePx&maxHeight=$sizePx&quality=90"
@@ -300,7 +305,7 @@ object Jellyfin {
     }
 
     /** Opens a song's original file on the server (for web control downloads). Blocking. */
-    fun openStream(song: Song): Pair<java.io.InputStream, Long>? {
+    override fun openStream(song: Song): Pair<java.io.InputStream, Long>? {
         val acc = account ?: return null
         if (!song.uri.toString().startsWith(acc.server)) return null
         return runCatching {
@@ -314,7 +319,7 @@ object Jellyfin {
     }
 
     /** Lyrics from the server (Jellyfin 10.9+), synced when they have timestamps. Blocking. */
-    fun lyrics(song: Song): Lyrics? {
+    override fun lyrics(song: Song): Lyrics? {
         val acc = account ?: return null
         val id = itemId(song) ?: return null
         val json = try {
@@ -348,7 +353,7 @@ object Jellyfin {
 
     /** Adds the Authorization header to requests for the signed-in server (used by ExoPlayer). */
     @OptIn(UnstableApi::class)
-    fun authorize(spec: DataSpec): DataSpec {
+    override fun authorize(spec: DataSpec): DataSpec {
         val acc = account ?: return spec
         if (!spec.uri.toString().startsWith(acc.server)) return spec
         return spec.withAdditionalHeaders(mapOf("Authorization" to authHeader(acc.token)))

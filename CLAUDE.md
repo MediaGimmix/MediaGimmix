@@ -117,12 +117,13 @@ Install with `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
   Add a button/action = add an enum entry (+ a branch in `Playback.perform`)
 - Search: `LibrarySearch` (Search.kt; accent/case-insensitive, every query word must match, ranked exact > prefix >
   word start > other) shared by `SearchScreen` (search button left of Settings, optional assets/icons/button_search.png;
-  On phone / Jellyfin chips; artists, albums, songs with "Show all"; a song plays from its album) and the API
+  On phone + one chip per signed-in server; artists, albums, songs with "Show all"; a song plays from its album) and the API
   (/api/search[/songs|albums|artists]?q=&limit=). Artist/album opened from search: Back returns to the results (`fromSearch`)
 - Network switches (`NetPolicy.kt`, Settings page "Network"; "net_internet", "net_local_api", both default on):
-  internet off = `NetPolicy.check` throws before any request to a non-local address (Jellyfin HTTP in `Jellyfin.open`,
-  ExoPlayer streams in Playback's ResolvingDataSource, artist pictures); local = loopback/private/link-local/CGNAT/ULA, so a
-  home Jellyfin keeps working. Local requests off = web control can't start (and stops), API answers 403
+  internet off = `NetPolicy.check` throws before any request to a non-local address (every netshare backend's HTTP
+  `open`, ExoPlayer streams in Playback's ResolvingDataSource, artist pictures); local =
+  loopback/private/link-local/CGNAT/ULA, so a home server keeps working. Local requests off = web control can't start
+  (and stops), API answers 403
 - Artist pictures (`ArtistImages.kt`): Deezer artist search (no key), exact normalized name match only, saved in
   filesDir/artist_images/<sha1(normalized name)>.jpg (.none = no picture, retried after 30 days). `LibraryViewModel`
   fetches while on Wi-Fi (NetworkCallback, ACCESS_NETWORK_STATE) and internet is on, after artist lists change.
@@ -133,20 +134,45 @@ Install with `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
   Times in `SplashConfig.kt` (edit + rebuild; all 0 = no splash); Settings → Startup switch "splash_enabled" (default on). The system launch screen is made plain black in
   res/values-v31/themes.xml so it blends in
 - Settings: categories (`SettingsCategory`) -> pages (`SettingsPage`). Audio: Audio, Buttons. Network: Network switches,
-  Jellyfin, Web control. Library: Library, Artist names, Artwork cache, Artist artwork. System: Startup, YubiKey, Stay on top.
+  Netshare, Web control. Library: Library, Artist names, Artwork cache, Artist artwork. System: Startup, YubiKey, Stay on top.
   BackHandler goes page -> category -> list. The user names the category for new settings; page names are ours
 - About (`AboutInfo`, under the category list): version, BuildConfig.GIT_COMMIT ("+" = uncommitted changes) and
   BUILD_TIME (set in app/build.gradle.kts), device, Android, output mode, library counts, network switches, Media3, Kotlin
-- Jellyfin (`Jellyfin.kt`): separate library section (`LibrarySection.JELLYFIN`, openKey paths "albums/<key>" etc.).
-  Sign-in via /Users/AuthenticateByName, only the token is stored (prefs "jellyfin"); library cached in
-  filesDir/jellyfin_library.json, auto-synced at start when > 12 h old. Songs are `Song`s with rootUri "jellyfin" and
-  uri `<server>/Audio/<id>/stream?static=true` (original files); `Jellyfin.authorize` adds the Authorization header in
-  Playback's ResolvingDataSource. Covers: `ArtSource.FromJellyfin` (album Primary image); lyrics: /Audio/<id>/Lyrics.
-  No play reporting, no downloads. Delete / local playlists are disabled for Jellyfin songs. INTERNET permission +
-  usesCleartextTraffic (plain-http home servers)
+- Netshare (`Netshare.kt`; Jellyfin, Navidrome, mStream): each server is an object implementing `NetshareBackend`
+  (listed in `Netshare.all`); its `id` is the songs' rootUri, the TokenVault scope, its prefs name and the API's
+  ?source=. Sign-in forms are built from `fields` (`SignInField`). The VM keeps one `ServerState` per built-in backend
+  (`vm.servers`, `vm.server(id)`, `vm.serverOf(song)`; generic `loadServer/signIn/signOut/syncServer`). Separate
+  library section (`LibrarySection.NETSHARE`, "Netshare"); the dropdown at the top (`vm.chooseServer`, saved as
+  "netshare_server" in "settings"; default = first signed-in) picks the server; openKey paths "albums/<key>" etc.
+  Covers: `ArtSource.FromServer(id, artId)` -> `backend.cover`. Delete / local playlists disabled for server songs
+  (`Netshare.isServerSong`). Add a server = new backend object + `Netshare.all` + TokenVault SCOPES + feature flag.
+  INTERNET permission + usesCleartextTraffic (plain-http home servers)
+- Jellyfin (`Jellyfin.kt`): sign-in via /Users/AuthenticateByName, only the token is stored (TokenVault scope
+  "jellyfin", plain in prefs "jellyfin" until YubiKeys guard it); library cached in filesDir/jellyfin_library.json,
+  auto-synced at start when > 12 h old. Songs are `Song`s with rootUri "jellyfin" and uri
+  `<server>/Audio/<id>/stream?static=true` (original files); `Jellyfin.authorize` adds the Authorization header in
+  Playback's ResolvingDataSource. Covers: album Primary image; lyrics: /Audio/<id>/Lyrics.
+  No play reporting, no downloads. Delete / local playlists are disabled for server songs
+- Navidrome (`Navidrome.kt`): talks Subsonic at `/rest` with the stable per-user token+salt (u/t/s query params) from
+  the native `POST /auth/login` (JSON body; 401 = wrong credentials) — never the 2-day JWT. Sign-in ping-checks the
+  token over /rest before storing it (scope "navidrome"). Sync = search3 with an empty query, paged 500 at a time
+  (Navidrome returns every song), then getPlaylists/getPlaylist (durations are whole seconds; created = dateAdded). Songs have rootUri "navidrome", uri
+  `<server>/rest/stream?id=<id>&format=raw` (original files; auth rides in the query, added by `Navidrome.authorize` in
+  Playback's ResolvingDataSource). Covers: the song's coverArt id via getCoverArt;
+  lyrics: OpenSubsonic getLyricsBySongId (structuredLyrics, synced preferred), else getLyrics?artist=&title=
+- mStream (`Mstream.kt`, API v1; mStream dropped its Subsonic API in v6.26): optionally behind Authentik. Two layers,
+  both headers (never in URLs): `Authorization: Basic <Authentik user>:<app password>` (needs "Intercept header auth"
+  on the proxy provider) and mStream's own token (`POST /api/v1/auth/login`) as `x-access-token`; no mStream user =
+  no token (servers without users are public). One JSON secret in the vault (scope "mstream"): Authentik user + app
+  password + token; the mStream password isn't kept. Redirects aren't followed (a 3xx = the proxy wants a browser
+  sign-in, reported as such); an HTML reply = wrong address/proxy. Sync = POST /api/v1/sync/manifest paged by
+  cursor/next (2000), then /api/v1/playlist/getall + /load. Songs: rootUri "mstream", uri
+  `<server>/media/<vpath>/<path>` (express.static: original file, Range works), folderPath = real folder.
+  Covers: /album-art/<file>?compress=zs (92 px) | zl (256 px) | original. Lyrics: /api/v1/lyrics?path= (synced LRC
+  preferred). No play reporting
 - Web control (`WebControl.kt` + `WebServer.kt`, no libraries; owned by `LibraryViewModel.web`): NEVER on at startup
   (running state is not saved, by the user's rule); port, access key and "require key" are saved ("web_port",
-  "web_key", "web_require_key"). JSON API under /api/ (key via X-Api-Key or ?key=; ?source=jellyfin for the Jellyfin
+  "web_key", "web_require_key"). JSON API under /api/ (key via X-Api-Key or ?key=; ?source=jellyfin|navidrome|mstream for that server's
   library; ids = first 16 hex of SHA-1 of the song uri / "album:<key>" / "artist:<key>"); endpoint list in the KDoc at the top of
   WebControl.kt. API only: the Bootstrap web panel was removed (the user uses scrcpy); non-/api/ paths 404. Library/player access is marshalled to the main thread (`onMain`). Settings page "Web control"
 - Bluetooth control (`BluetoothControl.kt`, owned by `LibraryViewModel.bluetooth`): the same API over classic
@@ -158,7 +184,8 @@ Install with `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
   switches (net_internet, net_local_api, net_bluetooth_api) are saved and always win. BLUETOOTH_CONNECT
   asked when switching on. Same access key as web control
 - YubiKey vault (`SecurityKeys.kt`, yubikit-android 3.0.1 — newest without a Kotlin 2.2 stdlib; no Google deps):
-  `TokenVault` stores the Jellyfin token plain (prefs "jellyfin") until a key is registered, then AES-GCM encrypted
+  `TokenVault` stores the netshare sign-ins (Jellyfin token; Navidrome token+salt; mStream app password + token) in per-backend
+  scopes ("jellyfin", "navidrome", "mstream") plain in the backend's prefs until a key is registered, then AES-GCM encrypted
   (prefs "vault") with a random vault key; each `TrustedKey` keeps a random challenge + the vault key wrapped with
   HKDF-SHA256(HMAC-SHA1 response, challenge). `YubiKeyUsb` (USB only) registers keys (optionally programming slot 1/2
   with a fresh HMAC secret, touch optional) and unlocks when a trusted key is plugged in. `Jellyfin.signedIn` vs
@@ -166,13 +193,14 @@ Install with `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
   android:allowBackup="false"
 
 ## Optional features (build flags)
-- `-Pmg.noDownloader`, `-Pmg.noJellyfin` (also YubiKey), `-Pmg.noWebControl`, `-Pmg.noBluetoothControl`,
+- `-Pmg.noDownloader`, `-Pmg.noJellyfin`, `-Pmg.noNavidrome`, `-Pmg.noMstream` (YubiKey goes out only when every netshare backend is out),
+  `-Pmg.noWebControl`, `-Pmg.noBluetoothControl`,
   `-Pmg.noArtistPictures`, `-Pmg.noMusicBrainz`, `-Pmg.offline` (all). Read in app/build.gradle.kts (`featureFlag`) -> `BuildConfig.FEATURE_*`
   + `FEATURES_OMITTED` (About "Left out"). Downloader and `YubiKeyUsb` live in src/downloader|yubikey with do-nothing
   stand-ins in src/downloaderStub|yubikeyStub (same API), picked by sourceSets; their libraries only added when built
   in. Unneeded permissions removed via a generated manifest overlay (debug/release source sets, tools:node="remove").
   Left-out features stay visible but greyed with `NOT_BUILT_IN` ("rebuild with network features"): `SettingsPage.available`,
-  `SettingsCategory.available`, `SwitchRow(builtIn)`, the Jellyfin menu row; startup/servers check the flags too
+  `SettingsCategory.available`, `SwitchRow(builtIn)`, the Netshare menu row; startup/servers check the flags too
 - yt-dlp downloader (`Downloader.kt` in src/downloader; youtubedl-android 0.18.1 + ffmpeg, needs extractNativeLibs /
   legacy jniLibs packaging): Settings → Library → Downloader. Downloads to filesDir/ytdlp, copies into the SAF folder
   picked once per kind ("dl_audio_folder"/"dl_video_folder", Change button), quick rescan after tracks. Tracks

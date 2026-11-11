@@ -336,7 +336,7 @@ fun NowPlayingScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             // Local playlists and deleting only work on files on the phone.
-            val local = song != null && !Jellyfin.isJellyfin(song)
+            val local = song != null && !Netshare.isServerSong(song)
             IconButton(onClick = { showAddToPlaylist = true }, enabled = local) {
                 Icon(Icons.Filled.Add, contentDescription = "Add to playlist")
             }

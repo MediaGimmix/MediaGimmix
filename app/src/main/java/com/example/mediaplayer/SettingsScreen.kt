@@ -34,6 +34,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -55,6 +56,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.mutableIntStateOf
 import java.text.DateFormat
@@ -282,8 +284,8 @@ fun SettingsScreen(
             SettingsPage.ARTIST_ART -> {
                 item { ArtistArtworkSettings(vm) }
             }
-            SettingsPage.JELLYFIN -> {
-                item { JellyfinSettings(vm) }
+            SettingsPage.NETSHARE -> {
+                item { NetshareSettings(vm) }
             }
             SettingsPage.ARTISTS -> {
                 // ---- artist splitting
@@ -406,75 +408,81 @@ fun SettingsScreen(
     }
 }
 
+/** The netshare settings: a sign-in and status panel per server built into the app. */
 @Composable
-private fun JellyfinSettings(vm: LibraryViewModel) {
-    val acc = vm.jellyfinAccount
+private fun NetshareSettings(vm: LibraryViewModel) {
+    Column {
+        vm.servers.forEachIndexed { i, st ->
+            if (i > 0) HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            ServerPanel(vm, st)
+        }
+    }
+}
+
+@Composable
+private fun ServerPanel(vm: LibraryViewModel, st: ServerState) {
+    val acc = st.account
+    val b = st.backend
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
         if (acc == null) {
-            var server by rememberSaveable { mutableStateOf(vm.jellyfinLastServer()) }
-            var user by rememberSaveable { mutableStateOf("") }
-            var password by remember { mutableStateOf("") } // never saved
-            Text("Sign in to your Jellyfin server", style = MaterialTheme.typography.titleSmall)
-            OutlinedTextField(
-                value = server,
-                onValueChange = { server = it },
-                label = { Text("Server address") },
-                placeholder = { Text("192.168.1.10:8096") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            )
-            OutlinedTextField(
-                value = user,
-                onValueChange = { user = it },
-                label = { Text("User name") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-            )
-            OutlinedTextField(
-                value = password,
-                onValueChange = { password = it },
-                label = { Text("Password") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-            )
+            // Typed values; secrets are cleared after each attempt and never saved.
+            val values = remember(st.id) { mutableStateMapOf("server" to vm.lastServer(st)) }
+            Text("Sign in to your ${st.label} server", style = MaterialTheme.typography.titleSmall)
+            b.fields.forEachIndexed { i, f ->
+                OutlinedTextField(
+                    value = values[f.key].orEmpty(),
+                    onValueChange = { values[f.key] = it },
+                    label = { Text(f.label + if (f.optional) " (optional)" else "") },
+                    placeholder = if (f.placeholder.isNotEmpty()) ({ Text(f.placeholder) }) else null,
+                    singleLine = true,
+                    visualTransformation = if (f.secret) PasswordVisualTransformation() else VisualTransformation.None,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = when {
+                            f.secret -> KeyboardType.Password
+                            f.key == "server" -> KeyboardType.Uri
+                            else -> KeyboardType.Text
+                        },
+                    ),
+                    modifier = Modifier.fillMaxWidth().padding(top = if (i == 0) 8.dp else 4.dp),
+                )
+            }
             Button(
                 onClick = {
-                    vm.signInJellyfin(server, user, password)
-                    password = ""
+                    vm.signIn(st, values.toMap())
+                    b.fields.filter { it.secret }.forEach { values.remove(it.key) }
                 },
-                enabled = !vm.jellyfinBusy && server.isNotBlank() && user.isNotBlank(),
+                enabled = !st.busy && b.fields.all { it.optional || !values[it.key].isNullOrBlank() },
                 modifier = Modifier.padding(top = 8.dp),
             ) { Text("Sign in") }
+            b.hint?.let { Note(it, horizontalPadding = 0) }
             Note(
-                "The password is sent to the server once and not stored; the app keeps only the access token. " +
-                    "The app only ever contacts this server, and doesn't report what you play.",
+                "The app keeps only ${b.keeps}, never your password. " +
+                    "It only ever contacts this server, and doesn't report what you play.",
                 horizontalPadding = 0,
             )
         } else {
-            if (vm.jellyfinLocked) {
+            if (st.locked) {
                 Text(
-                    "Locked: plug in a trusted YubiKey (Settings → YubiKey).",
+                    "Locked: plug in a trusted YubiKey (Settings → System → YubiKey).",
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(bottom = 6.dp),
                 )
             }
+            Text(st.label, style = MaterialTheme.typography.titleSmall)
             InfoRowPadded("Server", acc.serverName)
             InfoRowPadded("Address", acc.server)
             InfoRowPadded("User", acc.userName)
-            InfoRowPadded("Songs", count(vm.jellyfinSongs.size))
-            InfoRowPadded("Playlists", count(vm.jellyfinPlaylists.size))
+            InfoRowPadded("Songs", count(st.songs.size))
+            InfoRowPadded("Playlists", count(st.playlists.size))
             InfoRowPadded(
                 "Last sync",
-                if (vm.jellyfinSyncedAt == 0L) "Never"
-                else DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(vm.jellyfinSyncedAt)),
+                if (st.syncedAt == 0L) "Never"
+                else DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(st.syncedAt)),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
-                Button(onClick = { vm.syncJellyfin() }, enabled = !vm.jellyfinBusy && !vm.jellyfinLocked) { Text("Sync now") }
-                OutlinedButton(onClick = { vm.signOutJellyfin() }) { Text("Sign out") }
+                Button(onClick = { vm.syncServer(st) }, enabled = !st.busy && !st.locked) { Text("Sync now") }
+                OutlinedButton(onClick = { vm.signOut(st) }) { Text("Sign out") }
             }
             Note(
                 "Songs stream as the original files. The library refreshes by itself when the app starts " +
@@ -482,13 +490,14 @@ private fun JellyfinSettings(vm: LibraryViewModel) {
                 horizontalPadding = 0,
             )
         }
-        if (vm.jellyfinBusy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
-        if (vm.jellyfinStatus.isNotEmpty()) {
+        if (st.busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
+        val status = st.status
+        if (status.isNotEmpty()) {
             Text(
-                vm.jellyfinStatus,
+                status,
                 style = MaterialTheme.typography.bodyMedium,
-                color = if (vm.jellyfinStatus.contains("fail", true) || vm.jellyfinStatus.startsWith("Wrong") ||
-                    vm.jellyfinStatus.startsWith("Couldn't") || vm.jellyfinStatus.contains("doesn't look")
+                color = if (status.contains("fail", true) || status.startsWith("Wrong") || status.startsWith("Couldn't") ||
+                    status.contains("doesn't look") || status.contains("check", true) || status.contains("refused")
                 ) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
             )
         }
@@ -510,19 +519,19 @@ private fun SecurityKeySettings(vm: LibraryViewModel) {
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
         // ---- status
         val status = when {
-            keys.isEmpty() -> "Not protected: the Jellyfin sign-in is stored on the phone as is."
-            vm.jellyfinLocked || TokenVault.isLocked() -> "Protected and locked: plug in a trusted YubiKey."
+            keys.isEmpty() -> "Not protected: the netshare sign-ins are stored on the phone as is."
+            vm.servers.any { it.locked } || TokenVault.isLocked() -> "Protected and locked: plug in a trusted YubiKey."
             TokenVault.unlocked -> "Protected and unlocked until the app closes."
             else -> "Protected."
         }
         Text(status, style = MaterialTheme.typography.bodyLarge)
         if (keys.isNotEmpty() && TokenVault.unlocked) {
-            OutlinedButton(onClick = { vm.lockJellyfin() }, modifier = Modifier.padding(top = 6.dp)) { Text("Lock now") }
+            OutlinedButton(onClick = { vm.lockServers() }, modifier = Modifier.padding(top = 6.dp)) { Text("Lock now") }
         }
         yk.prompt?.let { p ->
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
                 Text(p, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.secondary, modifier = Modifier.weight(1f))
-                if (!p.startsWith("Jellyfin is locked")) TextButton(onClick = { yk.cancel() }) { Text("Cancel") }
+                if (!p.startsWith("Netshare is locked")) TextButton(onClick = { yk.cancel() }) { Text("Cancel") }
             }
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp))
         }
@@ -597,9 +606,9 @@ private fun SecurityKeySettings(vm: LibraryViewModel) {
             modifier = Modifier.padding(top = 8.dp),
         ) { Text("Register") }
         Note(
-            "Each trusted key can unlock on its own; de-trust a lost one here. Only the Jellyfin sign-in is " +
-                "protected (your password is never stored). If a key is lost, also sign out of Jellyfin and in " +
-                "again so the old sign-in stops working on the server.",
+            "Each trusted key can unlock on its own; de-trust a lost one here. Only the netshare sign-ins " +
+                "(Jellyfin, Navidrome, mStream) are protected (your passwords are never stored). If a key is lost, " +
+                "also sign out of the netshare servers and in again so the old sign-ins stop working.",
             horizontalPadding = 0,
         )
     }
@@ -647,11 +656,11 @@ private fun SecurityKeySettings(vm: LibraryViewModel) {
             text = {
                 Text(
                     if (last) {
-                        "It's the only trusted key, so protection turns off and the Jellyfin sign-in is stored on " +
+                        "It's the only trusted key, so protection turns off and the netshare sign-ins are stored on " +
                             "the phone unprotected again. The YubiKey itself isn't changed."
                     } else {
-                        "It can no longer unlock Jellyfin. The YubiKey itself isn't changed. If it was lost, also " +
-                            "sign out of Jellyfin and in again."
+                        "It can no longer unlock the netshare sign-ins. The YubiKey itself isn't changed. " +
+                            "If it was lost, also sign out of the netshare servers and in again."
                     },
                 )
             },
@@ -744,11 +753,11 @@ private fun WebControlSettings(web: WebControl) {
 private fun NetworkSettings(vm: LibraryViewModel) {
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
         SwitchRow(
-            builtIn = BuildConfig.FEATURE_JELLYFIN || BuildConfig.FEATURE_ARTIST_PICTURES || BuildConfig.FEATURE_DOWNLOADER,
+            builtIn = Netshare.anyBuiltIn || BuildConfig.FEATURE_ARTIST_PICTURES || BuildConfig.FEATURE_DOWNLOADER,
             title = "Internet access",
             description =
-            "Requests to the open internet: artist pictures, and a Jellyfin server on a public address. " +
-                "Off = nothing leaves the local network. A Jellyfin server at home keeps working.",
+            "Requests to the open internet: artist pictures, and a netshare server (Jellyfin, Navidrome, mStream) " +
+                "on a public address. Off = nothing leaves the local network. A server at home keeps working.",
             checked = NetPolicy.internet,
         ) { vm.setInternetAccess(it) }
         SwitchRow(
@@ -796,7 +805,6 @@ private fun ArtistArtworkSettings(vm: LibraryViewModel) {
 @Composable
 private fun AboutInfo(vm: LibraryViewModel) {
     val stats = vm.stats
-    val jellyfinSongs = vm.jellyfinSongs.size
     Column(modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 24.dp)) {
         Text("About", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.secondary)
         SelectionContainer {
@@ -818,7 +826,9 @@ private fun AboutInfo(vm: LibraryViewModel) {
                     "${"%,d".format(stats.songs)} songs · ${"%,d".format(stats.albums)} albums · " +
                         "${"%,d".format(stats.artists)} artists",
                 )
-                if (jellyfinSongs > 0) InfoRowPadded("Jellyfin", "${"%,d".format(jellyfinSongs)} songs")
+                vm.servers.filter { it.songs.isNotEmpty() }.forEach { st ->
+                    InfoRowPadded(st.label, "${"%,d".format(st.songs.size)} songs")
+                }
                 InfoRowPadded("Artist pictures", "%,d".format(vm.artistPhotoIds.size))
                 InfoRowPadded(
                     "Network",
@@ -1266,7 +1276,7 @@ enum class SettingsPage(val title: String, val summary: String) {
     AUDIO("Audio", "Output mode, output device, what's playing"),
     BUTTONS("Buttons", "Remap the volume and media buttons"),
     NETWORK("Network switches", "Internet access, local network requests"),
-    JELLYFIN("Jellyfin", "Server, sign in, sync"),
+    NETSHARE("Netshare", "Jellyfin, Navidrome and mStream servers, sign in, sync"),
     WEB("Web control", "Control the player through an HTTP API"),
     BLUETOOTH("Bluetooth control", "The same API for a paired phone, over Bluetooth"),
     LIBRARY("Library", "Music folders, scanning, library totals"),
@@ -1276,7 +1286,7 @@ enum class SettingsPage(val title: String, val summary: String) {
     DOWNLOADER("Downloader", "Download tracks and videos with yt-dlp"),
     TRACK_INFO("Track info", "Fix the tags of recently added tracks"),
     STARTUP("Startup", "Splash screen, open on wake"),
-    SECURITY("YubiKey", "Lock the Jellyfin sign-in behind security keys"),
+    SECURITY("YubiKey", "Lock the netshare sign-ins behind security keys"),
     STAY_ON_TOP("Stay on top", "Keep the player in front; show or hide its pin"),
     ;
 
@@ -1284,13 +1294,13 @@ enum class SettingsPage(val title: String, val summary: String) {
     val available: Boolean
         get() = when (this) {
             DOWNLOADER -> BuildConfig.FEATURE_DOWNLOADER
-            JELLYFIN, SECURITY -> BuildConfig.FEATURE_JELLYFIN
+            NETSHARE, SECURITY -> Netshare.anyBuiltIn
             WEB -> BuildConfig.FEATURE_WEB_CONTROL
             BLUETOOTH -> BuildConfig.FEATURE_BLUETOOTH_CONTROL
             ARTIST_ART -> BuildConfig.FEATURE_ARTIST_PICTURES
             // The switches page is only useful with something network-facing in the build.
-            NETWORK -> BuildConfig.FEATURE_JELLYFIN || BuildConfig.FEATURE_WEB_CONTROL ||
-                BuildConfig.FEATURE_BLUETOOTH_CONTROL || BuildConfig.FEATURE_ARTIST_PICTURES
+            NETWORK -> Netshare.anyBuiltIn || BuildConfig.FEATURE_WEB_CONTROL || BuildConfig.FEATURE_BLUETOOTH_CONTROL ||
+                BuildConfig.FEATURE_ARTIST_PICTURES
             else -> true
         }
 }
@@ -1299,8 +1309,8 @@ enum class SettingsPage(val title: String, val summary: String) {
 enum class SettingsCategory(val title: String, val summary: String, val pages: List<SettingsPage>) {
     AUDIO("Audio", "Output, buttons", listOf(SettingsPage.AUDIO, SettingsPage.BUTTONS)),
     NETWORK(
-        "Network", "Network switches, Jellyfin, web and Bluetooth control",
-        listOf(SettingsPage.NETWORK, SettingsPage.JELLYFIN, SettingsPage.WEB, SettingsPage.BLUETOOTH),
+        "Network", "Network switches, netshare, web and Bluetooth control",
+        listOf(SettingsPage.NETWORK, SettingsPage.NETSHARE, SettingsPage.WEB, SettingsPage.BLUETOOTH),
     ),
     LIBRARY(
         "Library", "Folders, artist names, artwork, downloader",

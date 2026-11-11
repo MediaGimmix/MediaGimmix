@@ -18,8 +18,8 @@ guidance. `CLAUDE.md` holds the architecture notes it works
 from, and they're also the best map of the code.
 
 No Google libraries or services at runtime, no analytics, no telemetry. The only network
-traffic is to servers you set up (Jellyfin), Deezer for artist pictures (optional, can be
-switched off) and Last.fm in the companion (only if you sign in).
+traffic is to servers you set up (Jellyfin, Navidrome, mStream), Deezer for artist pictures (optional,
+can be switched off) and Last.fm in the companion (only if you sign in).
 
 ## MediaGimmix (the main app, `app/`)
 
@@ -31,7 +31,9 @@ switched off) and Last.fm in the companion (only if you sign in).
 - Covers from embedded art or `cover.jpg`/`folder.jpg`, custom covers per album, playlist and artist
 - Artist pictures from Deezer on Wi-Fi (exact name match), else the newest album's cover
 - Synced (`.lrc`) and plain lyrics, from sidecar files or embedded tags
-- Jellyfin as a separate library section (original-file streaming, no transcoding)
+- Netshare servers as a separate library section: sign in to Jellyfin, Navidrome and/or mStream
+  (also behind an Authentik proxy, with an app password), pick the active server with a dropdown
+  (original-file streaming, no transcoding; server playlists and lyrics included)
 
 **Playback**
 - A visible, editable queue: the general queue (shuffled order shown) plus a separate *Play next* queue
@@ -54,7 +56,7 @@ switched off) and Last.fm in the companion (only if you sign in).
 - Web control: a JSON API on your local network (off at every start; access key; list limits)
 - The same API over classic Bluetooth (RFCOMM) for the companion app
 - Kill switches for internet access, local-network requests and Bluetooth requests
-- Optional YubiKey (USB, HMAC challenge-response) lock for the Jellyfin sign-in
+- Optional YubiKey (USB, HMAC challenge-response) lock for the netshare sign-ins
 
 ## MediaGimmix Remote (the companion app, `companion/`)
 
@@ -90,7 +92,9 @@ put `mg.noJellyfin=true` etc. in `gradle.properties`):
 | Flag | Leaves out |
 |---|---|
 | `-Pmg.noDownloader` | the yt-dlp downloader, and its bundled Python/ffmpeg (about 40 MB) |
-| `-Pmg.noJellyfin` | the Jellyfin section and sign-in, plus the YubiKey lock (it only guards Jellyfin) and its library |
+| `-Pmg.noJellyfin` | the Jellyfin server and sign-in (the netshare section stays while another server is in the build) |
+| `-Pmg.noNavidrome` | the Navidrome server and sign-in (same) |
+| `-Pmg.noMstream` | the mStream server and sign-in (same; with all three out, the YubiKey lock goes too) |
 | `-Pmg.noWebControl` | the web control API server |
 | `-Pmg.noBluetoothControl` | the API over Bluetooth, and the Bluetooth permissions |
 | `-Pmg.noArtistPictures` | artist pictures from Deezer |

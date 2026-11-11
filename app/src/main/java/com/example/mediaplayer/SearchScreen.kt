@@ -1,6 +1,8 @@
 package com.example.mediaplayer
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -36,7 +38,8 @@ import kotlinx.coroutines.withContext
 private const val PREVIEW_COUNT = 5
 
 /**
- * Search the library (or the Jellyfin library) for artists, albums and songs.
+ * Search the library (or a netshare server's library) for artists, albums and songs.
+ * [backend] is a netshare server id, or "" for the songs on the phone.
  * Tapping a song plays it from its album; artists and albums open their page.
  */
 @Composable
@@ -44,18 +47,20 @@ fun SearchScreen(
     vm: LibraryViewModel,
     query: String,
     onQueryChange: (String) -> Unit,
-    jellyfin: Boolean,
-    onJellyfinChange: (Boolean) -> Unit,
+    backend: String,
+    onBackendChange: (String) -> Unit,
     onBack: () -> Unit,
-    onOpenArtist: (key: String, jellyfin: Boolean) -> Unit,
-    onOpenAlbum: (key: String, jellyfin: Boolean) -> Unit,
+    onOpenArtist: (key: String, backend: String) -> Unit,
+    onOpenAlbum: (key: String, backend: String) -> Unit,
 ) {
     val playback = vm.playback
-    val jellyfinReady = vm.jellyfinAccount != null && !vm.jellyfinLocked
-    val useJellyfin = jellyfin && jellyfinReady
-    val songs = if (useJellyfin) vm.jellyfinSongs else vm.songs
-    val albums = if (useJellyfin) vm.jellyfinAlbums else vm.albums
-    val artists = if (useJellyfin) vm.jellyfinArtists else vm.artists
+    val ready = vm.servers.filter { it.ready }
+    // The chosen server, while it's signed in and unlocked; else the songs on the phone.
+    val server = ready.firstOrNull { it.id == backend }
+    val current = server?.id ?: ""
+    val songs = server?.songs ?: vm.songs
+    val albums = server?.albums ?: vm.albums
+    val artists = server?.artists ?: vm.artists
 
     var results by remember { mutableStateOf<LibrarySearch.Results?>(null) }
     LaunchedEffect(query, songs, albums, artists) {
@@ -93,13 +98,15 @@ fun SearchScreen(
             )
             StayOnTopToggle()
         }
-        if (jellyfinReady) {
+        if (ready.isNotEmpty()) {
             Row(
-                modifier = Modifier.padding(horizontal = 16.dp),
+                modifier = Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                FilterChip(selected = !useJellyfin, onClick = { onJellyfinChange(false) }, label = { Text("On phone") })
-                FilterChip(selected = useJellyfin, onClick = { onJellyfinChange(true) }, label = { Text("Jellyfin") })
+                FilterChip(selected = server == null, onClick = { onBackendChange("") }, label = { Text("On phone") })
+                ready.forEach { st ->
+                    FilterChip(selected = server === st, onClick = { onBackendChange(st.id) }, label = { Text(st.label) })
+                }
             }
         }
 
@@ -115,14 +122,14 @@ fun SearchScreen(
                         subtitle = artistSummary(a),
                         art = vm.artistArt(a),
                         actions = { artistActions(vm, a, onPickImage = null) },
-                        onClick = { onOpenArtist(a.key, useJellyfin) },
+                        onClick = { onOpenArtist(a.key, current) },
                     )
                 }
                 section("Albums", r.albums, allAlbums, { allAlbums = true }) { a ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onOpenAlbum(a.key, useJellyfin) }
+                            .clickable { onOpenAlbum(a.key, current) }
                             .padding(start = 12.dp, end = 16.dp, top = 3.dp, bottom = 3.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {

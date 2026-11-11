@@ -49,9 +49,9 @@ sealed interface ArtSource {
             get() = LibraryGrouping.albumKey(song)?.let { "album:$it" } ?: ("song:" + song.uri)
     }
 
-    /** A cover from the Jellyfin server: [itemId]'s Primary image. */
-    data class FromJellyfin(val itemId: String) : ArtSource {
-        override val key: String get() = "jf:" + itemId
+    /** A cover on a netshare server ([NetshareBackend.cover]): [backendId] + the server's art id. */
+    data class FromServer(val backendId: String, val artId: String) : ArtSource {
+        override val key: String get() = "srv:$backendId:$artId"
     }
 
     /** An image file in the app's own storage (downloaded artist pictures). */
@@ -112,7 +112,7 @@ object Artwork {
                         val fetched = runCatching { fetch(context, source, sizePx) }.getOrNull()
                         // A server cover that failed is likely a network problem: don't remember it as missing.
                         if (fetched == null) {
-                            if (source !is ArtSource.FromJellyfin) runCatching { none.createNewFile() }
+                            if (source !is ArtSource.FromServer) runCatching { none.createNewFile() }
                         } else {
                             runCatching {
                                 FileOutputStream(file).use { fetched.compress(Bitmap.CompressFormat.JPEG, 90, it) }
@@ -125,7 +125,7 @@ object Artwork {
         }
 
         if (bitmap == null) {
-            if (source !is ArtSource.FromJellyfin) synchronized(missing) { missing.add(key) }
+            if (source !is ArtSource.FromServer) synchronized(missing) { missing.add(key) }
             return null
         }
         return bitmap.asImageBitmap().also { memory.put(key, it) }
@@ -141,8 +141,8 @@ object Artwork {
     private fun fetch(context: Context, source: ArtSource, sizePx: Int): Bitmap? = when (source) {
         is ArtSource.FromImage -> decodeUri(context, Uri.parse(source.uri), sizePx)
         is ArtSource.FromFile -> File(source.path).takeIf { it.length() in 1..MAX_IMAGE_BYTES }?.readBytes()?.let { decodeBytes(it, sizePx) }
-        is ArtSource.FromJellyfin ->
-            Jellyfin.imageUrl(source.itemId, sizePx)?.let { Jellyfin.download(it) }?.let { decodeBytes(it, sizePx) }
+        is ArtSource.FromServer ->
+            Netshare.byId(source.backendId)?.cover(source.artId, sizePx)?.let { decodeBytes(it, sizePx) }
         is ArtSource.FromSong -> embedded(context, source.song, sizePx) ?: folderImage(context, source.song, sizePx)
     }
 

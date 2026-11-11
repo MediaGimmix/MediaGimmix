@@ -24,20 +24,22 @@ fun featureFlag(name: String): Boolean {
 }
 val offline = featureFlag("offline")
 val noDownloader = offline || featureFlag("noDownloader")
-val noJellyfin = offline || featureFlag("noJellyfin") // also leaves out the YubiKey lock (it only guards Jellyfin)
+val noJellyfin = offline || featureFlag("noJellyfin") // the YubiKey lock guards the netshare servers; all off leaves it out
+val noNavidrome = offline || featureFlag("noNavidrome")
+val noMstream = offline || featureFlag("noMstream")
 val noWebControl = offline || featureFlag("noWebControl")
 val noBluetoothControl = offline || featureFlag("noBluetoothControl")
 val noArtistPictures = offline || featureFlag("noArtistPictures")
 val noMusicBrainz = offline || featureFlag("noMusicBrainz")
 val omitted = listOfNotNull(
-    "downloader".takeIf { noDownloader }, "Jellyfin".takeIf { noJellyfin }, "web control".takeIf { noWebControl },
-    "Bluetooth control".takeIf { noBluetoothControl }, "artist pictures".takeIf { noArtistPictures },
-    "MusicBrainz lookup".takeIf { noMusicBrainz },
+    "downloader".takeIf { noDownloader }, "Jellyfin".takeIf { noJellyfin }, "Navidrome".takeIf { noNavidrome }, "mStream".takeIf { noMstream },
+    "web control".takeIf { noWebControl }, "Bluetooth control".takeIf { noBluetoothControl },
+    "artist pictures".takeIf { noArtistPictures }, "MusicBrainz lookup".takeIf { noMusicBrainz },
 )
 
 // Permissions a left-out feature no longer needs are removed from the merged manifest (incl. libraries').
 val removedPermissions = buildList {
-    if (noDownloader && noJellyfin && noWebControl && noArtistPictures && noMusicBrainz) add("android.permission.INTERNET")
+    if (noDownloader && noJellyfin && noNavidrome && noMstream && noWebControl && noArtistPictures && noMusicBrainz) add("android.permission.INTERNET")
     if (noDownloader && noArtistPictures) add("android.permission.ACCESS_NETWORK_STATE")
     if (noBluetoothControl) { add("android.permission.BLUETOOTH"); add("android.permission.BLUETOOTH_CONNECT") }
 }
@@ -73,6 +75,8 @@ android {
         buildConfigField("String", "BUILD_TIME", "\"$buildTime\"")
         buildConfigField("boolean", "FEATURE_DOWNLOADER", (!noDownloader).toString())
         buildConfigField("boolean", "FEATURE_JELLYFIN", (!noJellyfin).toString())
+        buildConfigField("boolean", "FEATURE_NAVIDROME", (!noNavidrome).toString())
+        buildConfigField("boolean", "FEATURE_MSTREAM", (!noMstream).toString())
         buildConfigField("boolean", "FEATURE_WEB_CONTROL", (!noWebControl).toString())
         buildConfigField("boolean", "FEATURE_BLUETOOTH_CONTROL", (!noBluetoothControl).toString())
         buildConfigField("boolean", "FEATURE_ARTIST_PICTURES", (!noArtistPictures).toString())
@@ -110,7 +114,7 @@ android {
     // Optional features: the real code or a do-nothing stand-in, and the permission-removal manifest on top of main's.
     sourceSets {
         getByName("main").java.srcDir(if (noDownloader) "src/downloaderStub/java" else "src/downloader/java")
-        getByName("main").java.srcDir(if (noJellyfin) "src/yubikeyStub/java" else "src/yubikey/java")
+        getByName("main").java.srcDir(if (noJellyfin && noNavidrome && noMstream) "src/yubikeyStub/java" else "src/yubikey/java")
         getByName("debug").manifest.srcFile(featureManifest)
         getByName("release").manifest.srcFile(featureManifest)
     }
@@ -150,11 +154,11 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-session:1.5.1")
-    // YubiKey over USB (HMAC challenge-response) for the Jellyfin token vault. 3.0.1: newest without a
-    // Kotlin 2.2 stdlib dependency; no Google libraries.
+    // YubiKey over USB (HMAC challenge-response) for the netshare token vault (Jellyfin, Navidrome, mStream).
+    // 3.0.1: newest without a Kotlin 2.2 stdlib dependency; no Google libraries.
     // Tag writing for Settings → Library → Track info (pure Java; MP3, M4A, FLAC, OGG Vorbis...).
     implementation("net.jthink:jaudiotagger:3.0.1")
-    if (!noJellyfin) {
+    if (!noJellyfin || !noNavidrome || !noMstream) {
         implementation("com.yubico.yubikit:android:3.0.1")
         implementation("com.yubico.yubikit:yubiotp:3.0.1")
     }

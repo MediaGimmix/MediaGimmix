@@ -29,22 +29,31 @@ data class TrustedKey(
 )
 
 /**
- * Keeps the Jellyfin access token, optionally locked behind YubiKeys.
+ * Keeps the netshare backends' sign-ins (Jellyfin's access token, Navidrome's
+ * subsonic token and salt), optionally locked behind YubiKeys. Each backend has
+ * its own [scope]: "jellyfin" and "navidrome".
  *
- * Without trusted keys the token is stored as before (app-private prefs). With
- * them, a random 256-bit vault key encrypts the token (AES-GCM, prefs "vault"),
- * and each trusted key holds its own copy of the vault key, wrapped with a key
- * derived (HKDF-SHA256) from that YubiKey's HMAC-SHA1 answer to a random
- * challenge. Only challenges and wrapped copies are stored: never the answers
- * or the vault key. Unlocking keeps the vault key in memory until the app
- * closes or "Lock now".
+ * Without trusted keys a scope's secret is stored in that backend's own
+ * app-private prefs (key "token"). With them, a random 256-bit vault key
+ * encrypts every scope's secret (AES-GCM, prefs "vault"), and each trusted key
+ * holds its own copy of the vault key, wrapped with a key derived (HKDF-SHA256)
+ * from that YubiKey's HMAC-SHA1 answer to a random challenge. Only challenges
+ * and wrapped copies are stored: never the answers or the vault key. Unlocking
+ * keeps the vault key in memory until the app closes or "Lock now".
  *
  * All methods are synchronized; [keys] and [unlocked] are Compose state.
  */
 object TokenVault {
     private const val INFO = "mediaplayer-vault-kek-v1"
+
+    /** The backend scopes that share the one vault key. */
+    const val SCOPE_JELLYFIN = "jellyfin"
+    const val SCOPE_NAVIDROME = "navidrome"
+    const val SCOPE_MSTREAM = "mstream"
+    private val SCOPES = listOf(SCOPE_JELLYFIN, SCOPE_NAVIDROME, SCOPE_MSTREAM)
+
+    private lateinit var ctx: Context
     private lateinit var prefs: SharedPreferences
-    private lateinit var plainPrefs: SharedPreferences
     private val random = SecureRandom()
     private val main = Handler(Looper.getMainLooper())
 
@@ -54,60 +63,69 @@ object TokenVault {
         private set
 
     private var vaultKey: ByteArray? = null
-    /** A sign-in made while locked: kept in memory until a trusted key unlocks and it can be saved. */
-    private var pendingToken: String? = null
+    /** Sign-ins made while locked: kept in memory, per scope, until a trusted key unlocks. */
+    private val pending = HashMap<String, String>()
 
     val isProtected: Boolean get() = keys.isNotEmpty()
 
     @Synchronized
     fun init(context: Context) {
         if (::prefs.isInitialized) return
+        ctx = context.applicationContext
         prefs = context.getSharedPreferences("vault", Context.MODE_PRIVATE)
-        plainPrefs = context.getSharedPreferences("jellyfin", Context.MODE_PRIVATE)
+        // The vault started life with only the Jellyfin token under "token_enc"; move it to its scope key.
+        if (prefs.contains("token_enc") && !prefs.contains(encKey(SCOPE_JELLYFIN))) {
+            prefs.edit().putString(encKey(SCOPE_JELLYFIN), prefs.getString("token_enc", null)).remove("token_enc").apply()
+        }
         keys = parseKeys(prefs.getString("keys", "[]")!!)
     }
 
-    // ---- the token ---------------------------------------------------------------------
+    private fun encKey(scope: String) = "token_enc_$scope"
 
-    /** The saved token: plain, or decrypted when unlocked. Null when there is none or it's locked. */
+    private fun plain(scope: String): SharedPreferences = ctx.getSharedPreferences(scope, Context.MODE_PRIVATE)
+
+    // ---- the secrets -------------------------------------------------------------
+
+    /** [scope]'s saved secret: plain, or decrypted when unlocked. Null when there is none or it's locked. */
     @Synchronized
-    fun readToken(): String? {
-        if (!isProtected) return plainPrefs.getString("token", null)
-        val key = vaultKey ?: return null
-        val enc = prefs.getString("token_enc", null) ?: return pendingToken
+    fun readToken(scope: String): String? {
+        if (!isProtected) return plain(scope).getString("token", null)
+        val key = vaultKey ?: return pending[scope]
+        val enc = prefs.getString(encKey(scope), null) ?: return pending[scope]
         return runCatching { String(decrypt(key, b64(enc))) }.getOrNull()
     }
 
-    /** True when an encrypted token is waiting for a trusted key. */
+    /** True when a protected secret is waiting for a trusted key. */
     @Synchronized
-    fun isLocked(): Boolean = isProtected && vaultKey == null && (prefs.contains("token_enc") || pendingToken != null)
+    fun isLocked(): Boolean =
+        isProtected && vaultKey == null && (SCOPES.any { prefs.contains(encKey(it)) } || pending.isNotEmpty())
 
-    /** Saves the token. Returns false when it's protected and locked: then it's kept in memory until unlock. */
+    /** Saves [scope]'s secret. Returns false when it's protected and locked: then it's kept in memory until unlock. */
     @Synchronized
-    fun writeToken(token: String): Boolean {
+    fun writeToken(token: String, scope: String): Boolean {
         if (!isProtected) {
-            plainPrefs.edit().putString("token", token).apply()
+            plain(scope).edit().putString("token", token).apply()
             return true
         }
         val key = vaultKey
         if (key == null) {
-            pendingToken = token
+            pending[scope] = token
             return false
         }
-        prefs.edit().putString("token_enc", s64(encrypt(key, token.toByteArray()))).apply()
-        plainPrefs.edit().remove("token").apply()
-        pendingToken = null
+        prefs.edit().putString(encKey(scope), s64(encrypt(key, token.toByteArray()))).apply()
+        plain(scope).edit().remove("token").apply()
+        pending.remove(scope)
         return true
     }
 
     @Synchronized
-    fun deleteToken() {
-        plainPrefs.edit().remove("token").apply()
-        prefs.edit().remove("token_enc").apply()
-        pendingToken = null
+    fun deleteToken(scope: String) {
+        plain(scope).edit().remove("token").apply()
+        prefs.edit().remove(encKey(scope)).apply()
+        pending.remove(scope)
     }
 
-    /** Forgets the vault key (and so the token) until a trusted key is plugged in again. */
+    /** Forgets the vault key (and so every secret) until a trusted key is plugged in again. */
     @Synchronized
     fun lock() {
         vaultKey?.fill(0)
@@ -123,14 +141,15 @@ object TokenVault {
         val kek = kek(response, entry.challenge)
         val key = runCatching { decrypt(kek, entry.wrapped) }.getOrNull() ?: return false
         vaultKey = key
-        pendingToken?.let { writeToken(it) }
+        for ((scope, token) in pending.toList()) writeToken(token, scope)
+        pending.clear()
         main.post { unlocked = true }
         return true
     }
 
     /**
      * Adds a key whose answer to [challenge] is [response]. The first key creates the vault and
-     * moves the plain token into it; later ones need the vault unlocked. Returns an error or null.
+     * moves the plain secrets into it; later ones need the vault unlocked. Returns an error or null.
      */
     @Synchronized
     fun addKey(name: String, serial: Int, slot: Int, challenge: ByteArray, response: ByteArray): String? {
@@ -138,10 +157,11 @@ object TokenVault {
         if (!isProtected) {
             key = ByteArray(32).also { random.nextBytes(it) }
             vaultKey = key
-            val plain = plainPrefs.getString("token", null) ?: pendingToken
-            if (plain != null) {
-                prefs.edit().putString("token_enc", s64(encrypt(key, plain.toByteArray()))).apply()
-                plainPrefs.edit().remove("token").apply()
+            for (scope in SCOPES) {
+                val plainToken = plain(scope).getString("token", null) ?: pending[scope] ?: continue
+                prefs.edit().putString(encKey(scope), s64(encrypt(key, plainToken.toByteArray()))).apply()
+                plain(scope).edit().remove("token").apply()
+                pending.remove(scope)
             }
         } else {
             key = vaultKey ?: return "Unlock with a trusted key first"
@@ -161,21 +181,21 @@ object TokenVault {
     }
 
     /**
-     * De-trusts a key. Removing the last one turns protection off and stores the token plainly
-     * again, which needs the vault unlocked (or no saved token). Returns an error or null.
+     * De-trusts a key. Removing the last one turns protection off and stores the secrets plainly
+     * again, which needs the vault unlocked (or no saved secrets). Returns an error or null.
      */
     @Synchronized
     fun removeKey(id: String): String? {
         val rest = keys.filter { it.id != id }
         if (rest.isEmpty()) {
-            val hasToken = prefs.contains("token_enc")
             val key = vaultKey
-            if (hasToken && key == null) return "Unlock with this key first, or sign out of Jellyfin"
-            if (hasToken && key != null) {
-                val token = String(decrypt(key, b64(prefs.getString("token_enc", null)!!)))
-                plainPrefs.edit().putString("token", token).apply()
+            for (scope in SCOPES) {
+                if (!prefs.contains(encKey(scope))) continue
+                if (key == null) return "Unlock with a trusted key first, or sign out of the netshare servers"
+                val token = String(decrypt(key, b64(prefs.getString(encKey(scope), null)!!)))
+                plain(scope).edit().putString("token", token).apply()
+                prefs.edit().remove(encKey(scope)).apply()
             }
-            prefs.edit().remove("token_enc").apply()
             vaultKey?.fill(0)
             vaultKey = null
             main.post { unlocked = false }

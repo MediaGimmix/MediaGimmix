@@ -43,7 +43,8 @@ object LyricsLoader {
         cache.get(key)?.let { return it.lyrics }
         val lyrics = withContext(Dispatchers.IO) {
             runCatching {
-                if (Jellyfin.isJellyfin(song)) Jellyfin.lyrics(song) else sidecar(context, song) ?: embedded(context, song)
+                val server = Netshare.of(song)
+                if (server != null) server.lyrics(song) else sidecar(context, song) ?: embedded(context, song)
             }.getOrNull()
         }
         cache.put(key, Result(lyrics))
